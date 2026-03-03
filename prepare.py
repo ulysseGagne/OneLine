@@ -4,10 +4,9 @@ Script 1: Prepare the graph and generate the interactive editing map.
 
 Steps:
   1. Find the main neighborhood boundary polygon
-  2. Download street network (main + margin buffer via bounding box)
-  3. Prune dead-ends in the main neighborhood (keeping border connectors)
-  4. Save the graph to disk
-  5. Generate the interactive HTML map in output/
+  2. Download street network (main + margin buffer)
+  3. Save the full graph to disk (dead-end removal happens later in solve.py)
+  4. Generate the interactive HTML map in output/
 """
 
 import sys
@@ -39,16 +38,13 @@ def main():
         margin_meters=config.MARGIN_METERS,
     )
 
-    # 3. Prune dead-ends (preserving border connectors)
-    pruned_graph = network.prune_dead_ends(merged_graph)
+    # 3. Save full graph to disk (no dead-end pruning here)
+    network.save_graph(merged_graph, org_graph, filepath=f"output/{slug}_graph.pickle")
 
-    # 4. Save graph to disk
-    network.save_graph(pruned_graph, org_graph, filepath=f"output/{slug}_graph.pickle")
+    # 4. Generate interactive map
+    map_path = interface.generate_map_html(merged_graph, slug=slug)
 
-    # 5. Generate interactive map
-    map_path = interface.generate_map_html(pruned_graph, slug=slug)
-
-    # 6. Open in browser
+    # 5. Open in browser
     import webbrowser
     webbrowser.open("file://" + os.path.abspath(map_path))
 

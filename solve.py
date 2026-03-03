@@ -6,8 +6,10 @@ Steps:
   1. Load the saved graph from prepare.py
   2. Load the edits JSON exported from the interactive map
   3. Apply edits (delete, create, include, start/end)
-  4. Run the longest-path solver
-  5. Visualize results and export GPX
+  4. Remove dead-end nodes (recursive, post-edit)
+  5. Export debug GPX of the final graph for verification
+  6. Run the longest-path solver
+  7. Visualize results and export GPX
 """
 
 import sys
@@ -50,7 +52,15 @@ def main():
     # 3. Apply edits
     graph, start_nodes, end_nodes = interface.apply_edits(graph, edits)
 
-    # 4. Run solver
+    # 4. Remove dead-end nodes (after edits, before solving)
+    protected = (start_nodes or set()) | (end_nodes or set())
+    graph = network.remove_dead_ends(graph, protected=protected)
+
+    # 5. Export debug GPX so the user can verify the graph before the long solve
+    print("\n--- Exporting debug graph ---")
+    export.export_debug_graph_gpx(graph, config.LOCATION, slug=slug)
+
+    # 6. Run solver
     print("\n--- Running solver ---")
     path_solver = solver.LongestPathSolver(
         graph, seed=config.SEED,
@@ -62,7 +72,7 @@ def main():
         print("No path found!")
         return
 
-    # 5. Visualize & export
+    # 7. Visualize & export
     print("\n--- Generating outputs ---")
     edge_path = visualize.path_nodes_to_edge_path(graph, best_path)
     visualize.plot_results(graph, best_path, best_dist, edge_path, slug=slug)

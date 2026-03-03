@@ -231,7 +231,8 @@ function getNodeColor(id) {
   if (id in startIds) return C_START;
   if (id in endIds)   return C_END;
   if (id in deletedIds) return C_DELETED;
-  if (id in loneIds) return C_DELETED;  // isolated nodes show red
+  if (id in loneIds) return C_DELETED;      // isolated nodes show red
+  if (id in deadEndIds) return C_EDGE_MIX;  // dead-end nodes show orange
   if (id in includedIds) return C_GREEN;
   var n = getNodeData(id);
   if (!n) return C_GREEN; // created nodes
@@ -279,6 +280,7 @@ function getNodeStatus(id) {
   if (id in endIds)   return "END";
   if (id in deletedIds) return "DELETED";
   if (id in loneIds) return "ISOLATED";
+  if (id in deadEndIds) return "dead-end";
   if (id in includedIds) return "INCLUDED";
   var n = getNodeData(id);
   if (n && !n.is_main) return "secondary";
@@ -348,8 +350,9 @@ function refreshAllEdges() {
   Object.keys(edgeLineMap).forEach(updateEdgeStyle);
 }
 
-// Track nodes that are visually lone (auto-red) separately from user-deleted
-var loneIds = {};
+// Track nodes that are visually lone (auto-red) or dead-ends (orange)
+var loneIds    = {};
+var deadEndIds = {};
 
 function getEffectiveDegree(id) {
   var deg = 0;
@@ -361,6 +364,7 @@ function getEffectiveDegree(id) {
     if (info.u === id) other = info.v;
     else if (info.v === id) other = info.u;
     if (other === null) return;
+    if (other === id) return;  // skip self-loops
     if (other in deletedIds) return;
     deg++;
   });
@@ -372,25 +376,30 @@ function getEffectiveDegree(id) {
 }
 
 function refreshLoneNodes() {
-  // Check all main nodes that are NOT user-deleted
-  var prevLone = loneIds;
-  loneIds = {};
+  // Recompute lone (degree 0) and dead-end (degree 1) sets for main nodes
+  var prevLone    = loneIds;
+  var prevDeadEnd = deadEndIds;
+  loneIds    = {};
+  deadEndIds = {};
 
   NODES.forEach(function(n) {
     if (!n.is_main) return;
     if (n.id in deletedIds) return;
-    if (getEffectiveDegree(n.id) === 0) {
+    var deg = getEffectiveDegree(n.id);
+    if (deg === 0) {
       loneIds[n.id] = true;
+    } else if (deg === 1) {
+      deadEndIds[n.id] = true;
     }
   });
 
-  // Update markers for nodes whose lone status changed
-  Object.keys(prevLone).forEach(function(id) {
-    if (!(id in loneIds)) updateMarkerStyle(Number(id));
-  });
-  Object.keys(loneIds).forEach(function(id) {
-    updateMarkerStyle(Number(id));
-  });
+  // Update markers for any node whose visual category changed
+  var changed = {};
+  Object.keys(prevLone).forEach(function(id) { changed[id] = true; });
+  Object.keys(loneIds).forEach(function(id) { changed[id] = true; });
+  Object.keys(prevDeadEnd).forEach(function(id) { changed[id] = true; });
+  Object.keys(deadEndIds).forEach(function(id) { changed[id] = true; });
+  Object.keys(changed).forEach(function(id) { updateMarkerStyle(Number(id)); });
 }
 
 /* ══════════════════════════════════════════════

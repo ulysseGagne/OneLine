@@ -67,3 +67,45 @@ def export_gpx(org_graph, graph, edge_path, location, slug="route"):
 
     print(f"GPX saved: {filepath}")
     print(f"Track points: {len(coordinates)}")
+
+
+def export_debug_graph_gpx(graph, location, slug="route"):
+    """
+    Export every edge of the final graph as a GPX file for pre-solve debugging.
+    Each edge becomes its own <trkseg> so mapping apps can display all streets.
+    """
+    trksegs = []
+    for u, v, data in graph.edges(data=True):
+        if "geometry" in data:
+            coords = [(float(y), float(x)) for x, y in data["geometry"].coords]
+        else:
+            coords = [
+                (float(graph.nodes[u]["y"]), float(graph.nodes[u]["x"])),
+                (float(graph.nodes[v]["y"]), float(graph.nodes[v]["x"])),
+            ]
+        pts = "\n".join(
+            f'      <trkpt lat="{lat}" lon="{lon}"></trkpt>'
+            for lat, lon in coords
+        )
+        trksegs.append(f"    <trkseg>\n{pts}\n    </trkseg>")
+
+    gpx = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<gpx version="1.1" creator="everystreet-longest-path"\n'
+        '     xmlns="http://www.topografix.com/GPX/1/1">\n'
+        "  <metadata>\n"
+        f"    <name>Debug Graph — {location}</name>\n"
+        f"    <time>{datetime.now().isoformat()}</time>\n"
+        "  </metadata>\n"
+        "  <trk>\n"
+        f"    <name>Debug Graph — {location}</name>\n"
+        + "\n".join(trksegs) + "\n"
+        "  </trk>\n"
+        "</gpx>"
+    )
+
+    filepath = os.path.join("output", f"{slug}_debug_graph.gpx")
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(gpx)
+
+    print(f"  Debug GPX saved: {filepath} ({graph.number_of_edges()} edges)")
