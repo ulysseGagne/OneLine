@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"/>
+<title>Route Editor</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #map { height: 100vh; width: 100vw; }
+
+  .panel {
+    position: fixed; top: 12px; right: 12px; z-index: 9999;
+    background: #fff; border-radius: 10px; width: 300px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.18); overflow: hidden;
+    max-height: calc(100vh - 24px); overflow-y: auto;
+  }
+  .panel-header {
+    background: #1a1a2e; color: #fff; padding: 14px 16px;
+    font-size: 15px; font-weight: 600;
+  }
+  .panel-body { padding: 12px 16px; }
+
+  .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px; }
+  .mode-btn {
+    padding: 9px 6px; border: 2px solid #ddd; border-radius: 8px;
+    background: #fff; cursor: pointer; font-size: 11.5px; font-weight: 700;
+    text-align: center; transition: all 0.15s; text-transform: uppercase;
+    letter-spacing: 0.3px; display: flex; align-items: center;
+    justify-content: center; gap: 5px;
+  }
+  .mode-btn:hover { border-color: #999; background: #fafafa; }
+  .mode-btn.active-delete { border-color: #f00; background: #fee; color: #c00; }
+  .mode-btn.active-create { border-color: #080; background: #ded; color: #050; }
+  .mode-btn.active-start  { border-color: #333; background: #f0f0f0; color: #000; }
+  .mode-btn.active-end    { border-color: #333; background: #f0f0f0; color: #333; }
+  .color-dot {
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+  }
+  .color-dot.white { background: #fff; border: 2px solid #333; }
+
+  .mode-hint {
+    font-size: 11.5px; color: #666; background: #f5f5f5; border-radius: 6px;
+    padding: 8px 10px; margin-bottom: 12px; line-height: 1.5;
+  }
+  .section-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; color: #888; margin-bottom: 4px; margin-top: 10px;
+  }
+  .stats {
+    font-size: 12px; color: #555; line-height: 1.8;
+    padding: 8px 0; border-bottom: 1px solid #eee; margin-bottom: 8px;
+  }
+  .stats .num { font-weight: 700; }
+  .stats .c-del { color: #f00; }
+  .stats .c-grn { color: #060; }
+  .stats .c-blk { color: #000; }
+
+  .export-btn {
+    display: block; width: 100%; padding: 12px; margin-top: 12px;
+    background: #1a1a2e; color: #fff; border: none; border-radius: 8px;
+    font-size: 14px; font-weight: 700; cursor: pointer; transition: background 0.15s;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .export-btn:hover { background: #2d2d4e; }
+  .export-btn.exported { background: #4CAF50; }
+
+  .node-info {
+    font-size: 11.5px; color: #999; margin-top: 10px;
+    padding-top: 8px; border-top: 1px solid #eee; min-height: 18px;
+  }
+  .undo-hint {
+    font-size: 10px; color: #bbb; text-align: center; margin-top: 6px;
+  }
+
+  .selection-bar {
+    font-size: 12px; padding: 6px 10px; border-radius: 6px;
+    margin-bottom: 8px; display: none;
+  }
+  .selection-bar.visible {
+    display: block; background: #ded; color: #050; border: 1px solid #080;
+  }
+
+  .node-label {
+    background: rgba(0,0,0,0.75); color: #fff; border: none; border-radius: 3px;
+    padding: 1px 4px; font: bold 11px monospace; white-space: nowrap; pointer-events: none;
+  }
+</style>
+</head><body>
+<div id="map"></div>
+<div class="panel">
+  <div class="panel-header">Route Editor</div>
+  <div class="panel-body">
+    <div class="mode-grid">
+      <div class="mode-btn active-delete" id="btn-delete" onclick="setMode('delete')">
+        <span class="color-dot" style="background:#f00"></span> Delete
+      </div>
+      <div class="mode-btn" id="btn-create" onclick="setMode('create')">
+        <span class="color-dot" style="background:#080"></span> Create
+      </div>
+      <div class="mode-btn" id="btn-start" onclick="setMode('start')">
+        <span class="color-dot" style="background:#000"></span> Start
+      </div>
+      <div class="mode-btn" id="btn-end" onclick="setMode('end')">
+        <span class="color-dot white"></span> End
+      </div>
+    </div>
+
+    <div class="mode-hint" id="mode-hint"></div>
+    <div class="selection-bar" id="selection-bar"></div>
+
+    <div class="section-label">Summary</div>
+    <div class="stats" id="stats"></div>
+
+    <div style="display:flex;gap:6px">
+      <button class="export-btn" id="import-btn" onclick="doImport()" style="background:#444">⬆ Import Edits</button>
+      <button class="export-btn" id="export-btn" onclick="doExport()">⬇ Export Edits</button>
+    </div>
+    <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(event)">
+    <div class="undo-hint">⌘Z / Ctrl+Z to undo</div>
+    <div class="node-info" id="node-info">Hover over a node for details</div>
+  </div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════
+   DATA
+   ══════════════════════════════════════════════ */
+var CENTER = %%CENTER%%;
+var EDGES  = %%EDGES%%;
+var NODES  = %%NODES%%;
+var SLUG   = "%%SLUG%%";
+
+/* ══════════════════════════════════════════════
+   COLORS
+   ══════════════════════════════════════════════ */
+var C_MAIN      = "#06f";
+var C_SECONDARY = "#e8e8e8";
+var C_DELETED   = "#f00";
+var C_GREEN     = "#080";
+var C_START     = "#000";
+var C_END       = "#fff";
+var C_EDGE_MAIN = "#06f";
+var C_EDGE_MIX  = "#f80";
+
+/* ══════════════════════════════════════════════
+   STATE
+   ══════════════════════════════════════════════ */
+var mode = "delete";
+
+var deletedIds   = {};
+var deletedEdges = {};
+var includedIds  = {};
+var startIds     = {};
+var endIds       = {};
+
+var createdNodes = [];
+var createdEdges = [];
+var nextNewId    = 0;
+var edgeSource   = null;
+
+// Undo stack: each entry is {type, ...data to reverse}
+var undoStack = [];
+var MAX_UNDO  = 200;
+
+// Leaflet
+var markerMap      = {};
+var createdMarkers = {};
+var edgeLineMap    = {};
+var createdLines   = [];
+
+/* ══════════════════════════════════════════════
+   MAP
+   ══════════════════════════════════════════════ */
+var map = L.map("map").setView(CENTER, 15);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+  maxZoom: 20, subdomains: "abcd"
+}).addTo(map);
+
+var nodeMainMap = {};
+NODES.forEach(function(n) { nodeMainMap[n.id] = n.is_main; });
+
+// Draw edges
+EDGES.forEach(function(e) {
+  var uMain = nodeMainMap[e.u];
+  var vMain = nodeMainMap[e.v];
+  if (!uMain && !vMain) return;
+  var bothMain = uMain && vMain;
+  var color = bothMain ? C_EDGE_MAIN : C_EDGE_MIX;
+  var line = L.polyline(e.coords, { color: color, weight: 4, opacity: 1.0 }).addTo(map);
+  var key = Math.min(e.u, e.v) + "-" + Math.max(e.u, e.v);
+  edgeLineMap[key] = { line: line, u: e.u, v: e.v, bothMain: bothMain };
+  line.on("click", function() { onEdgeClick(key); });
+});
+
+// Draw nodes
+NODES.forEach(function(n) {
+  var color = n.is_main ? C_MAIN : C_SECONDARY;
+  var marker = L.circleMarker([n.lat, n.lon], {
+    radius: 5, fillColor: color, color: "#fff", weight: 1, fillOpacity: 1.0
+  }).addTo(map);
+  marker.bindTooltip(String(n.id), {
+    permanent: false, direction: "top", offset: [0, -6], className: "node-label"
+  });
+  marker.on("click", function() { onNodeClick(n.id); });
+  marker.on("mouseover", function() {
+    document.getElementById("node-info").textContent =
+      "Node " + n.id + " | " + n.neighborhood + " | deg: " + n.deg +
+      " | OSM: " + n.osm + " | " + getNodeStatus(n.id);
+  });
+  markerMap[n.id] = marker;
+  marker._nodeData = n;
+});
+
+// Map click for create mode
+map.on("click", function(e) {
+  if (mode !== "create") return;
+  // Marker clicks set this flag; small timeout to handle race condition
+  if (window._markerClickFlag) { window._markerClickFlag = false; return; }
+  // Only create a node if we're NOT in edge-drawing mode
+  if (edgeSource !== null) return;
+  createNewNode(e.latlng.lat, e.latlng.lng);
+});
+
+/* ══════════════════════════════════════════════
+   NODE APPEARANCE
+   ══════════════════════════════════════════════ */
+function getNodeColor(id) {
+  if (id in startIds) return C_START;
+  if (id in endIds)   return C_END;
+  if (id in deletedIds) return C_DELETED;
+  if (id in loneIds) return C_DELETED;  // isolated nodes show red
+  if (id in includedIds) return C_GREEN;
+  var n = getNodeData(id);
+  if (!n) return C_GREEN; // created nodes
+  if (!n.is_main) return C_SECONDARY;
+  return C_MAIN;
+}
+
+function getNodeBorder(id) {
+  if (id in endIds)   return "#333";
+  if (id in startIds) return "#fff";
+  return "#fff";
+}
+
+function getNodeRadius(id) {
+  if (id in startIds || id in endIds) return 9;
+  if (id in deletedIds || id in includedIds) return 7;
+  // Created nodes
+  var n = getNodeData(id);
+  if (!n) return 7;
+  return 5;
+}
+
+function getNodeBorderWidth(id) {
+  if (id in startIds || id in endIds) return 2.5;
+  return 1;
+}
+
+function updateMarkerStyle(id) {
+  var m = markerMap[id] || createdMarkers[id];
+  if (m) {
+    m.setStyle({
+      fillColor: getNodeColor(id), color: getNodeBorder(id),
+      weight: getNodeBorderWidth(id), radius: getNodeRadius(id)
+    });
+  }
+}
+
+function getNodeData(id) {
+  if (typeof id === "number" && markerMap[id]) return markerMap[id]._nodeData;
+  return null;
+}
+
+function getNodeStatus(id) {
+  if (id in startIds) return "START";
+  if (id in endIds)   return "END";
+  if (id in deletedIds) return "DELETED";
+  if (id in loneIds) return "ISOLATED";
+  if (id in includedIds) return "INCLUDED";
+  var n = getNodeData(id);
+  if (n && !n.is_main) return "secondary";
+  if (!n) return "created";
+  return "main";
+}
+
+function isValidForStartEnd(id) {
+  if (id in deletedIds) return false;
+  var n = getNodeData(id);
+  if (!n) return true; // created node
+  if (n.is_main) return true;
+  if (id in includedIds) return true;
+  return false;
+}
+
+/* ══════════════════════════════════════════════
+   EDGE APPEARANCE
+   ══════════════════════════════════════════════ */
+function getNodeEffectiveState(id) {
+  if (id in deletedIds) return "deleted";
+  if (id in loneIds) return "deleted";  // lone = effectively deleted
+  if (id in includedIds) return "green";
+  var n = getNodeData(id);
+  if (!n) return "green";
+  if (n.is_main) return "main";
+  return "secondary";
+}
+
+function updateEdgeStyle(key) {
+  var info = edgeLineMap[key];
+  if (!info) return;
+
+  // Explicitly deleted edge always red dashed
+  if (key in deletedEdges) {
+    info.line.setStyle({ color: C_DELETED, opacity: 1.0, dashArray: "4 4", weight: 4 });
+    return;
+  }
+
+  var uState = getNodeEffectiveState(info.u);
+  var vState = getNodeEffectiveState(info.v);
+
+  // Either endpoint is green → green edge
+  if (uState === "green" || vState === "green") {
+    info.line.setStyle({ color: C_GREEN, opacity: 1.0, dashArray: null, weight: 4 });
+    return;
+  }
+
+  // Both active main → blue
+  if (uState === "main" && vState === "main") {
+    info.line.setStyle({ color: C_EDGE_MAIN, opacity: 1.0, dashArray: null, weight: 4 });
+    return;
+  }
+
+  // One active main, one non-main (deleted or secondary) → orange
+  if (uState === "main" || vState === "main") {
+    info.line.setStyle({ color: C_EDGE_MIX, opacity: 1.0, dashArray: null, weight: 4 });
+    return;
+  }
+
+  // Neither is active main (both deleted, both secondary, or mix) → red
+  info.line.setStyle({ color: C_DELETED, opacity: 1.0, dashArray: null, weight: 4 });
+}
+
+function refreshAllEdges() {
+  refreshLoneNodes();
+  Object.keys(edgeLineMap).forEach(updateEdgeStyle);
+}
+
+// Track nodes that are visually lone (auto-red) separately from user-deleted
+var loneIds = {};
+
+function getEffectiveDegree(id) {
+  var deg = 0;
+  // Count original edges that are not deleted and whose other endpoint is not deleted
+  Object.keys(edgeLineMap).forEach(function(key) {
+    if (key in deletedEdges) return;
+    var info = edgeLineMap[key];
+    var other = null;
+    if (info.u === id) other = info.v;
+    else if (info.v === id) other = info.u;
+    if (other === null) return;
+    if (other in deletedIds) return;
+    deg++;
+  });
+  // Count created edges
+  createdLines.forEach(function(cl) {
+    if (cl.from_id === id || cl.to_id === id) deg++;
+  });
+  return deg;
+}
+
+function refreshLoneNodes() {
+  // Check all main nodes that are NOT user-deleted
+  var prevLone = loneIds;
+  loneIds = {};
+
+  NODES.forEach(function(n) {
+    if (!n.is_main) return;
+    if (n.id in deletedIds) return;
+    if (getEffectiveDegree(n.id) === 0) {
+      loneIds[n.id] = true;
+    }
+  });
+
+  // Update markers for nodes whose lone status changed
+  Object.keys(prevLone).forEach(function(id) {
+    if (!(id in loneIds)) updateMarkerStyle(Number(id));
+  });
+  Object.keys(loneIds).forEach(function(id) {
+    updateMarkerStyle(Number(id));
+  });
+}
+
+/* ══════════════════════════════════════════════
+   MODE
+   ══════════════════════════════════════════════ */
+var HINTS = {
+  "delete": "<b>Click a node</b> to delete/restore it (<span style='color:#f00'>red</span>). <b>Click an edge</b> to delete/restore it.",
+  "create": "<b>Click empty space</b> to place a <span style='color:#080'>green</span> node. <b>Click a grey node</b> to include it. <b>Click two nodes</b> to draw an edge.",
+  "start":  "<b>Click</b> main/included nodes to toggle them as <b>START</b> (●). Multiple allowed.",
+  "end":    "<b>Click</b> main/included nodes to toggle them as <b>END</b> (○). Multiple allowed."
+};
+
+function setMode(m) {
+  mode = m;
+  clearEdgeSource();
+  var modes = ["delete","create","start","end"];
+  modes.forEach(function(b) {
+    document.getElementById("btn-" + b).className = "mode-btn" + (b === m ? " active-" + b : "");
+  });
+  document.getElementById("mode-hint").innerHTML = HINTS[m];
+  map.getContainer().style.cursor = (m === "create") ? "crosshair" : "";
+}
+setMode("delete");
+
+/* ══════════════════════════════════════════════
+   UNDO
+   ══════════════════════════════════════════════ */
+function pushUndo(action) {
+  undoStack.push(action);
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+}
+
+document.addEventListener("keydown", function(e) {
+  if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+    e.preventDefault();
+    doUndo();
+  }
+});
+
+function doUndo() {
+  if (!undoStack.length) return;
+  var a = undoStack.pop();
+
+  if (a.type === "delete-node") {
+    delete deletedIds[a.id];
+    updateMarkerStyle(a.id);
+    refreshAllEdges();
+  } else if (a.type === "restore-node") {
+    deletedIds[a.id] = true;
+    updateMarkerStyle(a.id);
+    refreshAllEdges();
+  } else if (a.type === "delete-edge") {
+    delete deletedEdges[a.key];
+    updateEdgeStyle(a.key);
+  } else if (a.type === "restore-edge") {
+    deletedEdges[a.key] = true;
+    updateEdgeStyle(a.key);
+  } else if (a.type === "include") {
+    delete includedIds[a.id];
+    updateMarkerStyle(a.id);
+    refreshAllEdges();
+  } else if (a.type === "uninclude") {
+    includedIds[a.id] = true;
+    updateMarkerStyle(a.id);
+    refreshAllEdges();
+  } else if (a.type === "add-start") {
+    delete startIds[a.id];
+    updateMarkerStyle(a.id);
+  } else if (a.type === "remove-start") {
+    startIds[a.id] = true;
+    updateMarkerStyle(a.id);
+  } else if (a.type === "add-end") {
+    delete endIds[a.id];
+    updateMarkerStyle(a.id);
+  } else if (a.type === "remove-end") {
+    endIds[a.id] = true;
+    updateMarkerStyle(a.id);
+  } else if (a.type === "create-node") {
+    // Remove the created node
+    removeCreatedNodeNoUndo(a.id);
+  } else if (a.type === "create-edge") {
+    // Remove last created edge
+    var idx = createdLines.length - 1;
+    if (idx >= 0 && createdLines[idx].from_id === a.from_id && createdLines[idx].to_id === a.to_id) {
+      map.removeLayer(createdLines[idx].line);
+      createdEdges.pop();
+      createdLines.pop();
+    }
+  } else if (a.type === "remove-created-node") {
+    // Re-create the node
+    _recreateNode(a.nodeData, a.edgeData);
+  }
+
+  refreshStats();
+}
+
+/* ══════════════════════════════════════════════
+   CLICK HANDLERS
+   ══════════════════════════════════════════════ */
+function onNodeClick(id) {
+  window._markerClickFlag = true;
+  if (mode === "delete") handleDelete(id);
+  else if (mode === "create") handleCreate(id);
+  else if (mode === "start") handleStart(id);
+  else if (mode === "end") handleEnd(id);
+  refreshStats();
+}
+
+function onEdgeClick(key) {
+  if (mode === "delete") {
+    toggleDeletedEdge(key);
+    refreshStats();
+  }
+}
+
+/* ── DELETE ── */
+function handleDelete(id) {
+  // Created node? remove it entirely
+  if (typeof id === "string" && id.startsWith("new_")) {
+    removeCreatedNode(id);
+    return;
+  }
+  var n = getNodeData(id);
+  if (!n || !n.is_main) return;
+
+  if (id in deletedIds) {
+    delete deletedIds[id];
+    pushUndo({ type: "restore-node", id: id });
+  } else {
+    deletedIds[id] = true;
+    // Remove from start/end if present
+    if (id in startIds) { delete startIds[id]; }
+    if (id in endIds)   { delete endIds[id]; }
+    pushUndo({ type: "delete-node", id: id });
+  }
+  updateMarkerStyle(id);
+  refreshAllEdges();
+}
+
+function toggleDeletedEdge(key) {
+  if (!(key in edgeLineMap)) return;
+  if (key in deletedEdges) {
+    delete deletedEdges[key];
+    pushUndo({ type: "restore-edge", key: key });
+  } else {
+    deletedEdges[key] = true;
+    pushUndo({ type: "delete-edge", key: key });
+  }
+  refreshAllEdges();
+}
+
+/* ── CREATE (includes "include secondary" + create nodes + create edges) ── */
+function handleCreate(id) {
+  var n = getNodeData(id);
+
+  // If it's a secondary node: toggle include
+  if (n && !n.is_main) {
+    if (id in includedIds) {
+      delete includedIds[id];
+      pushUndo({ type: "uninclude", id: id });
+    } else {
+      includedIds[id] = true;
+      pushUndo({ type: "include", id: id });
+    }
+    updateMarkerStyle(id);
+    refreshAllEdges();
+    return;
+  }
+
+  // Otherwise: edge drawing mode
+  if (edgeSource === null) {
+    edgeSource = id;
+    highlightEdgeSource(id, true);
+    document.getElementById("selection-bar").className = "selection-bar visible";
+    document.getElementById("selection-bar").textContent = "Edge from: " + id + " → click another node";
+  } else {
+    if (edgeSource === id) {
+      clearEdgeSource();
+    } else {
+      addCreatedEdge(edgeSource, id);
+      clearEdgeSource();
+    }
+  }
+}
+
+function highlightEdgeSource(id, on) {
+  var m = markerMap[id] || createdMarkers[id];
+  if (m) {
+    if (on) {
+      m.setStyle({ color: getNodeColor(id), weight: 3, radius: getNodeRadius(id) + 3 });
+    } else {
+      m.setStyle({ color: getNodeBorder(id), weight: getNodeBorderWidth(id), radius: getNodeRadius(id) });
+    }
+  }
+}
+
+function clearEdgeSource() {
+  if (edgeSource !== null) highlightEdgeSource(edgeSource, false);
+  edgeSource = null;
+  document.getElementById("selection-bar").className = "selection-bar";
+}
+
+/* ── START (multi) ── */
+function handleStart(id) {
+  if (!isValidForStartEnd(id)) return;
+
+  // If it's currently an end, remove from end first
+  if (id in endIds) {
+    delete endIds[id];
+  }
+
+  if (id in startIds) {
+    delete startIds[id];
+    pushUndo({ type: "remove-start", id: id });
+  } else {
+    startIds[id] = true;
+    pushUndo({ type: "add-start", id: id });
+  }
+  updateMarkerStyle(id);
+}
+
+/* ── END (multi) ── */
+function handleEnd(id) {
+  if (!isValidForStartEnd(id)) return;
+
+  if (id in startIds) {
+    delete startIds[id];
+  }
+
+  if (id in endIds) {
+    delete endIds[id];
+    pushUndo({ type: "remove-end", id: id });
+  } else {
+    endIds[id] = true;
+    pushUndo({ type: "add-end", id: id });
+  }
+  updateMarkerStyle(id);
+}
+
+/* ══════════════════════════════════════════════
+   CREATED NODES & EDGES
+   ══════════════════════════════════════════════ */
+function createNewNode(lat, lon) {
+  var id = "new_" + nextNewId;
+  nextNewId++;
+  createdNodes.push({ id: id, lat: lat, lon: lon });
+
+  var marker = L.circleMarker([lat, lon], {
+    radius: 7, fillColor: C_GREEN, color: "#fff", weight: 1.5, fillOpacity: 1.0
+  }).addTo(map);
+  marker.bindTooltip(id, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
+  marker.on("click", function() { onNodeClick(id); });
+  marker.on("mouseover", function() {
+    document.getElementById("node-info").textContent =
+      "Created node " + id + " | lat: " + lat.toFixed(5) + " lon: " + lon.toFixed(5);
+  });
+  createdMarkers[id] = marker;
+  pushUndo({ type: "create-node", id: id });
+  refreshStats();
+}
+
+function removeCreatedNode(id) {
+  // Save data for undo
+  var nodeData = null;
+  for (var i = 0; i < createdNodes.length; i++) {
+    if (createdNodes[i].id === id) { nodeData = createdNodes[i]; break; }
+  }
+  var edgeData = [];
+  createdLines.forEach(function(cl) {
+    if (cl.from_id === id || cl.to_id === id) {
+      edgeData.push({ from_id: cl.from_id, to_id: cl.to_id });
+    }
+  });
+  pushUndo({ type: "remove-created-node", id: id, nodeData: nodeData, edgeData: edgeData });
+  removeCreatedNodeNoUndo(id);
+  refreshStats();
+}
+
+function removeCreatedNodeNoUndo(id) {
+  if (createdMarkers[id]) { map.removeLayer(createdMarkers[id]); delete createdMarkers[id]; }
+  createdNodes = createdNodes.filter(function(n) { return n.id !== id; });
+  var toRemove = [];
+  createdLines.forEach(function(cl, idx) {
+    if (cl.from_id === id || cl.to_id === id) { map.removeLayer(cl.line); toRemove.push(idx); }
+  });
+  for (var i = toRemove.length - 1; i >= 0; i--) {
+    createdEdges.splice(toRemove[i], 1);
+    createdLines.splice(toRemove[i], 1);
+  }
+  if (id in startIds) delete startIds[id];
+  if (id in endIds) delete endIds[id];
+}
+
+function _recreateNode(nodeData, edgeData) {
+  if (!nodeData) return;
+  createdNodes.push(nodeData);
+  var marker = L.circleMarker([nodeData.lat, nodeData.lon], {
+    radius: 7, fillColor: C_GREEN, color: "#fff", weight: 1.5, fillOpacity: 1.0
+  }).addTo(map);
+  marker.bindTooltip(nodeData.id, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
+  marker.on("click", function() { onNodeClick(nodeData.id); });
+  marker.on("mouseover", function() {
+    document.getElementById("node-info").textContent =
+      "Created node " + nodeData.id + " | lat: " + nodeData.lat.toFixed(5) + " lon: " + nodeData.lon.toFixed(5);
+  });
+  createdMarkers[nodeData.id] = marker;
+  // Recreate edges
+  edgeData.forEach(function(ed) { addCreatedEdgeNoUndo(ed.from_id, ed.to_id); });
+}
+
+function getNodeLatLon(id) {
+  if (typeof id === "number" && markerMap[id]) {
+    var n = markerMap[id]._nodeData;
+    return [n.lat, n.lon];
+  }
+  if (typeof id === "string") {
+    for (var i = 0; i < createdNodes.length; i++) {
+      if (createdNodes[i].id === id) return [createdNodes[i].lat, createdNodes[i].lon];
+    }
+  }
+  return null;
+}
+
+function addCreatedEdge(fromId, toId) {
+  addCreatedEdgeNoUndo(fromId, toId);
+  pushUndo({ type: "create-edge", from_id: fromId, to_id: toId });
+  refreshStats();
+}
+
+function addCreatedEdgeNoUndo(fromId, toId) {
+  var a = getNodeLatLon(fromId);
+  var b = getNodeLatLon(toId);
+  if (!a || !b) return;
+  var line = L.polyline([a, b], { color: C_GREEN, weight: 4, opacity: 1.0, dashArray: "6 4" }).addTo(map);
+  createdEdges.push({ from_id: fromId, to_id: toId });
+  createdLines.push({ line: line, from_id: fromId, to_id: toId });
+}
+
+/* ══════════════════════════════════════════════
+   STATS
+   ══════════════════════════════════════════════ */
+function refreshStats() {
+  var nDelN = Object.keys(deletedIds).length;
+  var nDelE = Object.keys(deletedEdges).length;
+  var nCre  = createdNodes.length;
+  var nEdg  = createdEdges.length;
+  var nInc  = Object.keys(includedIds).length;
+  var nSt   = Object.keys(startIds).length;
+  var nEn   = Object.keys(endIds).length;
+
+  var html = "";
+  html += '<span class="c-del num">' + nDelN + '</span> deleted nodes, ';
+  html += '<span class="c-del num">' + nDelE + '</span> deleted edges<br>';
+  html += '<span class="c-grn num">' + nCre + '</span> created nodes, ';
+  html += '<span class="c-grn num">' + nEdg + '</span> created edges, ';
+  html += '<span class="c-grn num">' + nInc + '</span> included<br>';
+  html += 'Start: <span class="c-blk num">' + (nSt ? nSt + " nodes" : "—") + '</span> · ';
+  html += 'End: <span class="c-blk num">' + (nEn ? nEn + " nodes" : "—") + '</span>';
+
+  document.getElementById("stats").innerHTML = html;
+}
+refreshStats();
+
+/* ══════════════════════════════════════════════
+   EXPORT
+   ══════════════════════════════════════════════ */
+function doExport() {
+  var edgesWithLength = createdEdges.map(function(e) {
+    var a = getNodeLatLon(e.from_id);
+    var b = getNodeLatLon(e.to_id);
+    var length = (a && b) ? haversine(a[0], a[1], b[0], b[1]) : 0;
+    return { from_id: e.from_id, to_id: e.to_id, length: Math.round(length * 100) / 100 };
+  });
+
+  var createdNodesOut = createdNodes.map(function(n) {
+    return { id: parseInt(n.id.replace("new_", "")), lat: n.lat, lon: n.lon };
+  });
+
+  var deletedEdgesOut = Object.keys(deletedEdges).map(function(key) {
+    var parts = key.split("-");
+    return { u: parseInt(parts[0]), v: parseInt(parts[1]) };
+  });
+
+  var payload = {
+    deleted_ids:   Object.keys(deletedIds).map(Number).sort(function(a,b){return a-b;}),
+    deleted_edges: deletedEdgesOut,
+    created_nodes: createdNodesOut,
+    created_edges: edgesWithLength,
+    included_ids:  Object.keys(includedIds).map(Number).sort(function(a,b){return a-b;}),
+    start_ids:     Object.keys(startIds).map(function(x){ return isNaN(x) ? x : Number(x); }),
+    end_ids:       Object.keys(endIds).map(function(x){ return isNaN(x) ? x : Number(x); })
+  };
+
+  var json = JSON.stringify(payload, null, 2);
+  var blob = new Blob([json], { type: "application/json" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = SLUG + "_edits.json";
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+
+  var btn = document.getElementById("export-btn");
+  btn.textContent = "✓ Exported!"; btn.classList.add("exported");
+  setTimeout(function() { btn.textContent = "⬇ Export Edits"; btn.classList.remove("exported"); }, 2000);
+}
+
+/* ══════════════════════════════════════════════
+   IMPORT
+   ══════════════════════════════════════════════ */
+function doImport() {
+  document.getElementById("import-file").click();
+}
+
+function handleImportFile(event) {
+  var file = event.target.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var data = JSON.parse(e.target.result);
+      applyImport(data);
+      var btn = document.getElementById("import-btn");
+      btn.textContent = "✓ Imported!";
+      setTimeout(function() { btn.textContent = "⬆ Import Edits"; }, 2000);
+    } catch (err) {
+      alert("Invalid JSON file: " + err.message);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = ""; // reset so same file can be re-imported
+}
+
+function applyImport(data) {
+  // Reset all state
+  deletedIds = {};
+  deletedEdges = {};
+  includedIds = {};
+  startIds = {};
+  endIds = {};
+  undoStack = [];
+
+  // Remove all created nodes/edges
+  Object.keys(createdMarkers).forEach(function(id) {
+    map.removeLayer(createdMarkers[id]);
+  });
+  createdMarkers = {};
+  createdLines.forEach(function(cl) { map.removeLayer(cl.line); });
+  createdLines = [];
+  createdNodes = [];
+  createdEdges = [];
+
+  // Apply deleted nodes
+  (data.deleted_ids || []).forEach(function(id) {
+    deletedIds[id] = true;
+  });
+
+  // Apply deleted edges
+  (data.deleted_edges || []).forEach(function(de) {
+    var key = Math.min(de.u, de.v) + "-" + Math.max(de.u, de.v);
+    if (key in edgeLineMap) deletedEdges[key] = true;
+  });
+
+  // Apply included nodes
+  (data.included_ids || []).forEach(function(id) {
+    includedIds[id] = true;
+  });
+
+  // Apply created nodes
+  (data.created_nodes || []).forEach(function(cn) {
+    createNewNodeFromImport(cn.id, cn.lat, cn.lon);
+  });
+
+  // Apply created edges
+  (data.created_edges || []).forEach(function(ce) {
+    addCreatedEdgeNoUndo(ce.from_id, ce.to_id);
+  });
+
+  // Apply start/end nodes (support both old single and new multi format)
+  var starts = data.start_ids || (data.start_id != null ? [data.start_id] : []);
+  var ends = data.end_ids || (data.end_id != null ? [data.end_id] : []);
+  starts.forEach(function(id) { startIds[id] = true; });
+  ends.forEach(function(id) { endIds[id] = true; });
+
+  // Refresh everything
+  NODES.forEach(function(n) { updateMarkerStyle(n.id); });
+  refreshAllEdges();
+  refreshStats();
+}
+
+function createNewNodeFromImport(idx, lat, lon) {
+  var id = "new_" + idx;
+  if (idx >= nextNewId) nextNewId = idx + 1;
+  createdNodes.push({ id: id, lat: lat, lon: lon });
+
+  var marker = L.circleMarker([lat, lon], {
+    radius: 7, fillColor: C_GREEN, color: "#fff", weight: 1.5, fillOpacity: 1.0
+  }).addTo(map);
+  marker.bindTooltip(id, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
+  marker.on("click", function() { onNodeClick(id); });
+  marker.on("mouseover", function() {
+    document.getElementById("node-info").textContent =
+      "Created node " + id + " | lat: " + lat.toFixed(5) + " lon: " + lon.toFixed(5);
+  });
+  createdMarkers[id] = marker;
+}
+
+/* ══════════════════════════════════════════════
+   HAVERSINE
+   ══════════════════════════════════════════════ */
+function haversine(lat1, lon1, lat2, lon2) {
+  var R = 6371000;
+  var dLat = (lat2 - lat1) * Math.PI / 180;
+  var dLon = (lon2 - lon1) * Math.PI / 180;
+  var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+          Math.sin(dLon/2) * Math.sin(dLon/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+</script>
+</body></html>
