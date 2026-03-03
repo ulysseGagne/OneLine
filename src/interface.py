@@ -71,11 +71,25 @@ def generate_map_html(graph, output_dir="output", slug="map"):
     with open(template_path, "r", encoding="utf-8") as f:
         html = f.read()
 
+    # Load pre-existing edits for auto-import (from Downloads or output/)
+    initial_edits = None
+    edits_name = f"{slug}_edits.json"
+    for candidate in [
+        os.path.expanduser(f"~/Downloads/{edits_name}"),
+        os.path.join(output_dir, edits_name),
+    ]:
+        if os.path.exists(candidate):
+            with open(candidate, "r", encoding="utf-8") as ef:
+                initial_edits = json.load(ef)
+            print(f"  Auto-import: loaded {candidate}")
+            break
+
     # Inject the data and slug
     html = html.replace("%%CENTER%%", json.dumps([center_lat, center_lon]))
     html = html.replace("%%EDGES%%", json.dumps(edge_lines))
     html = html.replace("%%NODES%%", json.dumps(nodes_data))
     html = html.replace("%%SLUG%%", slug)
+    html = html.replace("%%INITIAL_EDITS%%", json.dumps(initial_edits))
 
     # Save
     filepath = os.path.join(output_dir, f"{slug}_map.html")
