@@ -220,7 +220,7 @@ def apply_edits(graph, edits):
             return id_to_osm.get(nid)
         return None
 
-    # 4. Add created edges with haversine-computed lengths
+    # 4. Add created edges with exported or haversine-computed lengths
     edges_added = 0
     for ce in created_edges:
         from_osm = resolve_node_id(ce["from_id"])
@@ -232,10 +232,13 @@ def apply_edits(graph, edits):
             print(f"  Warning: skipping edge (node not in graph)")
             continue
 
-        length = haversine(
-            graph.nodes[from_osm]["y"], graph.nodes[from_osm]["x"],
-            graph.nodes[to_osm]["y"], graph.nodes[to_osm]["x"],
-        )
+        if "length" in ce:
+            length = ce["length"]
+        else:
+            length = haversine(
+                graph.nodes[from_osm]["y"], graph.nodes[from_osm]["x"],
+                graph.nodes[to_osm]["y"], graph.nodes[to_osm]["x"],
+            )
         graph.add_edge(from_osm, to_osm, length=length, created=True)
         edges_added += 1
 
