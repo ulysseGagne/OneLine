@@ -31,8 +31,9 @@
   }
   .mode-btn:hover { border-color: #999; background: #fafafa; }
   .mode-btn.active-delete    { border-color: #f00; background: #fee; color: #c00; }
-  .mode-btn.active-add-node  { border-color: #080; background: #ded; color: #050; }
-  .mode-btn.active-draw-edge { border-color: #080; background: #ded; color: #050; }
+  .mode-btn.active-add-node  { border-color: #a855f7; background: #ede9fe; color: #5b21b6; }
+  .mode-btn.active-draw-road { border-color: #0cc; background: #d0fffe; color: #077; }
+  .mode-btn.active-draw-path { border-color: #080; background: #ded; color: #050; }
   .mode-btn.active-split     { border-color: #7c3aed; background: #ede9fe; color: #5b21b6; }
   .mode-btn.active-start     { border-color: #333; background: #f0f0f0; color: #000; }
   .mode-btn.active-end       { border-color: #333; background: #f0f0f0; color: #333; }
@@ -98,10 +99,13 @@
         <span class="color-dot" style="background:#f00"></span> Delete
       </div>
       <div class="mode-btn" id="btn-add-node" onclick="setMode('add-node')">
-        <span class="color-dot" style="background:#080"></span> Add Node
+        <span class="color-dot" style="background:#a855f7"></span> Add Node
       </div>
-      <div class="mode-btn" id="btn-draw-edge" onclick="setMode('draw-edge')">
-        <span class="color-dot" style="background:#080"></span> Draw Edge
+      <div class="mode-btn" id="btn-draw-road" onclick="setMode('draw-road')">
+        <span class="color-dot" style="background:#0cc"></span> Draw Road
+      </div>
+      <div class="mode-btn" id="btn-draw-path" onclick="setMode('draw-path')">
+        <span class="color-dot" style="background:#080"></span> Draw Path
       </div>
       <div class="mode-btn" id="btn-split" onclick="setMode('split')">
         <span class="color-dot" style="background:#a855f7"></span> Split
@@ -147,6 +151,7 @@ var C_MAIN      = "#06f";
 var C_SECONDARY = "#e8e8e8";
 var C_DELETED   = "#f00";
 var C_GREEN     = "#080";
+var C_CYAN      = "#0cc";
 var C_SPLIT     = "#a855f7";
 var C_START     = "#000";
 var C_END       = "#fff";
@@ -160,6 +165,7 @@ var mode = "delete";
 
 var deletedIds   = {};
 var deletedEdges = {};
+var splitHiddenEdges = {};  // edges hidden because they were split (not shown as red)
 var includedIds  = {};
 var startIds     = {};
 var endIds       = {};
@@ -191,15 +197,21 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
   maxZoom: 20, subdomains: "abcd"
 }).addTo(map);
+// Nodes render in a dedicated pane above all edges so clicks always target nodes first
+map.createPane('nodePane');
+map.getPane('nodePane').style.zIndex = 450;
 
 var nodeMainMap = {};
 NODES.forEach(function(n) { nodeMainMap[n.id] = n.is_main; });
 
 // Draw edges
+var edgeKeyCounter = {};
 EDGES.forEach(function(e) {
   var uMain = nodeMainMap[e.u];
   var vMain = nodeMainMap[e.v];
-  var key = Math.min(e.u, e.v) + "-" + Math.max(e.u, e.v);
+  var base = Math.min(e.u, e.v) + "-" + Math.max(e.u, e.v);
+  if (!(base in edgeKeyCounter)) edgeKeyCounter[base] = 0;
+  var key = base + "_" + edgeKeyCounter[base]++;
   if (!uMain && !vMain) {
     // Secondary-to-secondary: store for later reveal, don't draw yet
     secEdgeData[key] = { coords: e.coords, u: e.u, v: e.v };
@@ -218,7 +230,7 @@ EDGES.forEach(function(e) {
 NODES.forEach(function(n) {
   var color = n.is_main ? C_MAIN : C_SECONDARY;
   var marker = L.circleMarker([n.lat, n.lon], {
-    radius: 7, fillColor: color, color: "#fff", weight: 1, fillOpacity: 1.0
+    radius: 7, fillColor: color, color: "#fff", weight: 1, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(String(n.id), {
     permanent: false, direction: "top", offset: [0, -6], className: "node-label"
@@ -257,10 +269,24 @@ function getNodeColor(id) {
     for (var i = 0; i < createdNodes.length; i++) {
       if (createdNodes[i].id === id && createdNodes[i].split) return C_SPLIT;
     }
-    return C_GREEN;
+    return getCreatedNodeColor(id);
   }
   if (!n.is_main) return C_SECONDARY;
   return C_MAIN;
+}
+
+function getCreatedNodeColor(id) {
+  var hasRoad = false, hasPath = false;
+  for (var i = 0; i < createdLines.length; i++) {
+    var cl = createdLines[i];
+    if (cl.from_id === id || cl.to_id === id) {
+      if (cl.edgeType === "path") hasPath = true;
+      else hasRoad = true;
+    }
+  }
+  if (hasRoad) return C_CYAN;
+  if (hasPath) return C_GREEN;
+  return C_SPLIT;  // no edges — purple
 }
 
 function getNodeBorder(id) {
@@ -326,6 +352,8 @@ function isValidForStartEnd(id) {
 function getNodeEffectiveState(id) {
   if (id in deletedIds) return "deleted";
   if (id in loneIds) return "deleted";  // lone = effectively deleted
+  if (id in startIds || id in endIds) return "main";  // start/end exempt from dead-end
+  if (id in deadEndIds) return "dead-end";
   if (id in includedIds) return "green";
   var n = getNodeData(id);
   if (!n) return "green";
@@ -337,6 +365,15 @@ function updateEdgeStyle(key) {
   var info = edgeLineMap[key];
   if (!info) return;
 
+  // Split-hidden edge: completely invisible (split sub-edges drawn on top)
+  if (key in splitHiddenEdges) {
+    info.line.setStyle({ opacity: 0, weight: 0 });
+    info.hitbox.setStyle({ opacity: 0, weight: 0 });
+    return;
+  }
+  // Restore hitbox if previously hidden by split
+  info.hitbox.setStyle({ opacity: 0, weight: 18 });
+
   // Explicitly deleted edge always red dashed
   if (key in deletedEdges) {
     info.line.setStyle({ color: C_DELETED, opacity: 1.0, dashArray: "4 4", weight: 4 });
@@ -346,8 +383,27 @@ function updateEdgeStyle(key) {
   var uState = getNodeEffectiveState(info.u);
   var vState = getNodeEffectiveState(info.v);
 
-  // Either endpoint is green → green edge
-  if (uState === "green" || vState === "green") {
+  // Either endpoint deleted/lone → red (not part of active graph)
+  if (uState === "deleted" || vState === "deleted") {
+    info.line.setStyle({ color: C_DELETED, opacity: 1.0, dashArray: null, weight: 4 });
+    return;
+  }
+
+  // Self-loop edges are always useless (discarded by solver) → orange
+  if (info.u === info.v) {
+    info.line.setStyle({ color: C_EDGE_MIX, opacity: 1.0, dashArray: null, weight: 4 });
+    return;
+  }
+
+  // Either endpoint is dead-end → orange
+  if (uState === "dead-end" || vState === "dead-end") {
+    info.line.setStyle({ color: C_EDGE_MIX, opacity: 1.0, dashArray: null, weight: 4 });
+    return;
+  }
+
+  // Either endpoint is green → green edge (but not if other is secondary)
+  if ((uState === "green" || vState === "green") &&
+      uState !== "secondary" && vState !== "secondary") {
     info.line.setStyle({ color: C_GREEN, opacity: 1.0, dashArray: null, weight: 4 });
     return;
   }
@@ -358,7 +414,7 @@ function updateEdgeStyle(key) {
     return;
   }
 
-  // One active main, one non-main (deleted or secondary) → orange
+  // One active main, one secondary → orange
   if (uState === "main" || vState === "main") {
     info.line.setStyle({ color: C_EDGE_MIX, opacity: 1.0, dashArray: null, weight: 4 });
     return;
@@ -370,13 +426,30 @@ function updateEdgeStyle(key) {
     return;
   }
 
-  // Neither is active main (both deleted, or mix of deleted+secondary) → red
+  // Fallback → red
   info.line.setStyle({ color: C_DELETED, opacity: 1.0, dashArray: null, weight: 4 });
 }
 
 function refreshAllEdges() {
   refreshLoneNodes();
   Object.keys(edgeLineMap).forEach(updateEdgeStyle);
+  refreshCreatedEdgeStyles();
+}
+
+function refreshCreatedEdgeStyles() {
+  createdLines.forEach(function(cl) {
+    var fromState = getNodeEffectiveState(cl.from_id);
+    var toState = getNodeEffectiveState(cl.to_id);
+    var baseColor = cl.split ? C_SPLIT : (cl.edgeType === "path" ? C_GREEN : C_CYAN);
+
+    if (fromState === "deleted" || toState === "deleted") {
+      cl.line.setStyle({ color: C_DELETED, opacity: 1.0, dashArray: "6 4", weight: 4 });
+    } else if (fromState === "dead-end" || toState === "dead-end") {
+      cl.line.setStyle({ color: C_EDGE_MIX, opacity: 1.0, dashArray: "6 4", weight: 4 });
+    } else {
+      cl.line.setStyle({ color: baseColor, opacity: 1.0, dashArray: "6 4", weight: 4 });
+    }
+  });
 }
 
 function revealSecondaryEdges(id) {
@@ -385,7 +458,7 @@ function revealSecondaryEdges(id) {
     if (key in edgeLineMap) return;  // already drawn
     var sec = secEdgeData[key];
     if (sec.u !== id && sec.v !== id) return;
-    var line   = L.polyline(sec.coords, { color: C_EDGE_MIX, weight: 4, opacity: 1.0 }).addTo(map);
+    var line   = L.polyline(sec.coords, { color: "#ccc", weight: 2, opacity: 0.5 }).addTo(map);
     var hitbox = L.polyline(sec.coords, { color: C_EDGE_MIX, weight: 18, opacity: 0  }).addTo(map);
     edgeLineMap[key] = { line: line, hitbox: hitbox, u: sec.u, v: sec.v, bothMain: false, coords: sec.coords };
     line.on("click",   function(ev) { onEdgeClick(key, ev.latlng); });
@@ -398,8 +471,8 @@ var loneIds    = {};
 var deadEndIds = {};
 
 function getEffectiveDegree(id) {
+  // Count valid edges: non-deleted, non-loop, other endpoint not deleted/lone
   var deg = 0;
-  // Count original edges that are not deleted and whose other endpoint is not deleted
   Object.keys(edgeLineMap).forEach(function(key) {
     if (key in deletedEdges) return;
     var info = edgeLineMap[key];
@@ -411,15 +484,21 @@ function getEffectiveDegree(id) {
     if (other in deletedIds) return;
     deg++;
   });
-  // Count created edges
+  // Count created edges (same rules: skip self-loops and deleted endpoints)
   createdLines.forEach(function(cl) {
-    if (cl.from_id === id || cl.to_id === id) deg++;
+    var other = null;
+    if (cl.from_id === id) other = cl.to_id;
+    else if (cl.to_id === id) other = cl.from_id;
+    if (other === null) return;
+    if (other === id) return;  // skip self-loops
+    if (other in deletedIds) return;
+    deg++;
   });
   return deg;
 }
 
 function refreshLoneNodes() {
-  // Recompute lone (degree 0) and dead-end (degree 1) sets for main nodes
+  // Recompute lone (degree 0) and dead-end (degree 1) sets for all active nodes
   var prevLone    = loneIds;
   var prevDeadEnd = deadEndIds;
   loneIds    = {};
@@ -428,11 +507,23 @@ function refreshLoneNodes() {
   NODES.forEach(function(n) {
     if (!n.is_main) return;
     if (n.id in deletedIds) return;
+    if (n.id in startIds || n.id in endIds) return;  // start/end exempt
     var deg = getEffectiveDegree(n.id);
     if (deg === 0) {
       loneIds[n.id] = true;
     } else if (deg === 1) {
       deadEndIds[n.id] = true;
+    }
+  });
+
+  // Also evaluate created nodes (green & purple)
+  createdNodes.forEach(function(cn) {
+    if (cn.id in startIds || cn.id in endIds) return;  // start/end exempt
+    var deg = getEffectiveDegree(cn.id);
+    if (deg === 0) {
+      loneIds[cn.id] = true;
+    } else if (deg === 1) {
+      deadEndIds[cn.id] = true;
     }
   });
 
@@ -442,7 +533,11 @@ function refreshLoneNodes() {
   Object.keys(loneIds).forEach(function(id) { changed[id] = true; });
   Object.keys(prevDeadEnd).forEach(function(id) { changed[id] = true; });
   Object.keys(deadEndIds).forEach(function(id) { changed[id] = true; });
-  Object.keys(changed).forEach(function(id) { updateMarkerStyle(Number(id)); });
+  Object.keys(changed).forEach(function(id) {
+    // Created node ids are strings ("new_X"), original node ids are numeric
+    var nodeId = (typeof id === "string" && id.indexOf("new_") === 0) ? id : Number(id);
+    updateMarkerStyle(nodeId);
+  });
 }
 
 /* ══════════════════════════════════════════════
@@ -450,8 +545,9 @@ function refreshLoneNodes() {
    ══════════════════════════════════════════════ */
 var HINTS = {
   "delete":    "<b>Click a node</b> to delete/restore it (<span style='color:#f00'>red</span>). <b>Click an edge</b> to delete/restore it.",
-  "add-node":  "<b>Click empty space</b> to place a <span style='color:#080'>green</span> node. <b>Click a grey node</b> to include it.",
-  "draw-edge": "<b>Click two nodes</b> to draw a <span style='color:#080'>green</span> edge between them.",
+  "add-node":  "<b>Click empty space</b> to place a <span style='color:#a855f7'>purple</span> node. <b>Click a grey node</b> to include it.",
+  "draw-road": "<b>Click two nodes</b> to draw a <span style='color:#0cc'>cyan road</span> edge between them.",
+  "draw-path": "<b>Click two nodes</b> to draw a <span style='color:#080'>green path</span> edge (zero distance).",
   "split":     "<b>Click an edge</b> to <span style='color:#a855f7'>split</span> it at the nearest point, inserting a new node.",
   "start":     "<b>Click</b> main/included nodes to toggle them as <b>START</b> (●). Multiple allowed.",
   "end":       "<b>Click</b> main/included nodes to toggle them as <b>END</b> (○). Multiple allowed."
@@ -460,13 +556,13 @@ var HINTS = {
 function setMode(m) {
   mode = m;
   clearEdgeSource();
-  var modes = ["delete", "add-node", "draw-edge", "split", "start", "end"];
+  var modes = ["delete", "add-node", "draw-road", "draw-path", "split", "start", "end"];
   modes.forEach(function(b) {
     var el = document.getElementById("btn-" + b);
     if (el) el.className = "mode-btn" + (b === m ? " active-" + b : "");
   });
   document.getElementById("mode-hint").innerHTML = HINTS[m];
-  map.getContainer().style.cursor = (m === "add-node" || m === "draw-edge" || m === "split") ? "crosshair" : "";
+  map.getContainer().style.cursor = (m === "add-node" || m === "draw-road" || m === "draw-path" || m === "split") ? "crosshair" : "";
 }
 setMode("delete");
 
@@ -547,20 +643,26 @@ function doUndo() {
         break;
       }
     }
-    refreshLoneNodes();  // endpoints may now be isolated
+    refreshAllEdges();
   } else if (a.type === "delete-created-edge") {
-    // Restore the deleted green edge
-    addCreatedEdgeNoUndo(a.from_id, a.to_id);
-    refreshLoneNodes();
+    // Restore the deleted edge
+    addCreatedEdgeNoUndo(a.from_id, a.to_id, { edgeType: a.edgeType });
+    refreshAllEdges();
   } else if (a.type === "remove-created-node") {
     // Re-create the node
     _recreateNode(a.nodeData, a.edgeData);
+    refreshAllEdges();
   } else if (a.type === "split") {
     // Remove sub-edges + split node, restore original edge
     removeCreatedNodeNoUndo(a.newId);
     delete deletedEdges[a.key];
-    updateEdgeStyle(a.key);
-    refreshLoneNodes();
+    delete splitHiddenEdges[a.key];
+    refreshAllEdges();
+  } else if (a.type === "split-created") {
+    // Remove sub-edges + split node, restore original created edge
+    removeCreatedNodeNoUndo(a.newId);
+    addCreatedEdgeNoUndo(a.fromId, a.toId, { split: a.wasSplit, coords: a.oldCoords, edgeType: a.edgeType });
+    refreshAllEdges();
   }
 
   redoStack.push(redoAction);
@@ -622,8 +724,8 @@ function doRedo() {
     if (a.nodeData) _recreateNode(a.nodeData, []);
     undoStack.push({ type: "create-node", id: a.id });
   } else if (a.type === "create-edge") {
-    addCreatedEdgeNoUndo(a.from_id, a.to_id);
-    refreshLoneNodes();
+    addCreatedEdgeNoUndo(a.from_id, a.to_id, { edgeType: a.edgeType });
+    refreshAllEdges();
     undoStack.push(a);
   } else if (a.type === "delete-created-edge") {
     // Re-delete: find and remove the edge
@@ -636,18 +738,18 @@ function doRedo() {
         break;
       }
     }
-    refreshLoneNodes();
+    refreshAllEdges();
     undoStack.push(a);
   } else if (a.type === "remove-created-node") {
     removeCreatedNodeNoUndo(a.id);
     undoStack.push(a);
   } else if (a.type === "split") {
-    // Re-apply split: delete original edge, recreate node + sub-edges
+    // Re-apply split: hide original edge, recreate node + sub-edges
     deletedEdges[a.key] = true;
-    updateEdgeStyle(a.key);
+    splitHiddenEdges[a.key] = true;
     createdNodes.push(a.nodeData);
     var sm = L.circleMarker([a.nodeData.lat, a.nodeData.lon], {
-      radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0
+      radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
     }).addTo(map);
     sm.bindTooltip(a.newId, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
     (function(nid, nd) {
@@ -658,9 +760,37 @@ function doRedo() {
       });
     })(a.newId, a.nodeData);
     createdMarkers[a.newId] = sm;
-    addCreatedEdgeNoUndo(a.u, a.newId, { split: true, coords: a.coordsBefore });
-    addCreatedEdgeNoUndo(a.newId, a.v, { split: true, coords: a.coordsAfter });
-    refreshLoneNodes();
+    addCreatedEdgeNoUndo(a.u, a.newId, { split: true, coords: a.coordsBefore, edgeType: "road" });
+    addCreatedEdgeNoUndo(a.newId, a.v, { split: true, coords: a.coordsAfter, edgeType: "road" });
+    refreshAllEdges();
+    undoStack.push(a);
+  } else if (a.type === "split-created") {
+    // Re-apply split on created edge: remove restored edge, recreate split node + sub-edges
+    for (var i = createdLines.length - 1; i >= 0; i--) {
+      if (createdLines[i].from_id === a.fromId && createdLines[i].to_id === a.toId) {
+        map.removeLayer(createdLines[i].line);
+        if (createdLines[i].hitbox) map.removeLayer(createdLines[i].hitbox);
+        createdEdges.splice(i, 1);
+        createdLines.splice(i, 1);
+        break;
+      }
+    }
+    createdNodes.push(a.nodeData);
+    var sm = L.circleMarker([a.nodeData.lat, a.nodeData.lon], {
+      radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
+    }).addTo(map);
+    sm.bindTooltip(a.newId, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
+    (function(nid, nd) {
+      sm.on("click", function() { onNodeClick(nid); });
+      sm.on("mouseover", function() {
+        document.getElementById("node-info").textContent =
+          "Split node " + nid + " | lat: " + nd.lat.toFixed(5) + " lon: " + nd.lon.toFixed(5);
+      });
+    })(a.newId, a.nodeData);
+    createdMarkers[a.newId] = sm;
+    addCreatedEdgeNoUndo(a.fromId, a.newId, { split: true, coords: a.coordsBefore, edgeType: a.edgeType });
+    addCreatedEdgeNoUndo(a.newId, a.toId, { split: true, coords: a.coordsAfter, edgeType: a.edgeType });
+    refreshAllEdges();
     undoStack.push(a);
   }
 
@@ -674,7 +804,7 @@ function onNodeClick(id) {
   window._markerClickFlag = true;
   if (mode === "delete")    handleDelete(id);
   else if (mode === "add-node")  handleAddNode(id);
-  else if (mode === "draw-edge") handleDrawEdge(id);
+  else if (mode === "draw-road" || mode === "draw-path") handleDrawEdge(id);
   else if (mode === "start") handleStart(id);
   else if (mode === "end")   handleEnd(id);
   refreshStats();
@@ -745,19 +875,32 @@ function handleAddNode(id) {
   // Clicking a main or created node in add-node mode does nothing
 }
 
-/* ── DRAW EDGE (click two nodes to connect them) ── */
+/* ── DRAW ROAD / DRAW PATH (click two nodes to connect them) ── */
 function handleDrawEdge(id) {
+  var edgeType = (mode === "draw-path") ? "path" : "road";
+  var modeColor = (edgeType === "path") ? "#080" : "#0cc";
+  var bar = document.getElementById("selection-bar");
   if (edgeSource === null) {
     edgeSource = id;
     highlightEdgeSource(id, true);
-    document.getElementById("selection-bar").className = "selection-bar visible";
-    document.getElementById("selection-bar").textContent = "Edge from: " + id + " → click another node";
+    bar.className = "selection-bar visible";
+    bar.textContent = "Edge from: " + id + " → click another node";
+    bar.style.background = modeColor;
+    bar.style.color = (edgeType === "path") ? "#fff" : "#000";
+    bar.style.borderColor = modeColor;
   } else {
     if (edgeSource === id) {
       clearEdgeSource();
     } else {
-      addCreatedEdge(edgeSource, id);
-      clearEdgeSource();
+      addCreatedEdge(edgeSource, id, edgeType);
+      // Advance selection to the target node
+      highlightEdgeSource(edgeSource, false);
+      edgeSource = id;
+      highlightEdgeSource(id, true);
+      bar.textContent = "Edge from: " + id + " → click another node (click source to deselect)";
+      bar.style.background = modeColor;
+      bar.style.color = (edgeType === "path") ? "#fff" : "#000";
+      bar.style.borderColor = modeColor;
     }
   }
 }
@@ -776,7 +919,11 @@ function highlightEdgeSource(id, on) {
 function clearEdgeSource() {
   if (edgeSource !== null) highlightEdgeSource(edgeSource, false);
   edgeSource = null;
-  document.getElementById("selection-bar").className = "selection-bar";
+  var bar = document.getElementById("selection-bar");
+  bar.className = "selection-bar";
+  bar.style.background = "";
+  bar.style.color = "";
+  bar.style.borderColor = "";
 }
 
 /* ── START (multi) ── */
@@ -846,7 +993,7 @@ function createNewNode(lat, lon) {
   createdNodes.push({ id: id, lat: lat, lon: lon });
 
   var marker = L.circleMarker([lat, lon], {
-    radius: 7, fillColor: C_GREEN, color: "#fff", weight: 1.5, fillOpacity: 1.0
+    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(id, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
   marker.on("click", function() { onNodeClick(id); });
@@ -868,7 +1015,7 @@ function removeCreatedNode(id) {
   var edgeData = [];
   createdLines.forEach(function(cl) {
     if (cl.from_id === id || cl.to_id === id) {
-      edgeData.push({ from_id: cl.from_id, to_id: cl.to_id });
+      edgeData.push({ from_id: cl.from_id, to_id: cl.to_id, edgeType: cl.edgeType });
     }
   });
   pushUndo({ type: "remove-created-node", id: id, nodeData: nodeData, edgeData: edgeData });
@@ -893,14 +1040,14 @@ function removeCreatedNodeNoUndo(id) {
   }
   if (id in startIds) delete startIds[id];
   if (id in endIds) delete endIds[id];
-  refreshLoneNodes();  // connected nodes may now be isolated
+  refreshAllEdges();
 }
 
 function _recreateNode(nodeData, edgeData) {
   if (!nodeData) return;
   createdNodes.push(nodeData);
   var marker = L.circleMarker([nodeData.lat, nodeData.lon], {
-    radius: 7, fillColor: C_GREEN, color: "#fff", weight: 1.5, fillOpacity: 1.0
+    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(nodeData.id, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
   marker.on("click", function() { onNodeClick(nodeData.id); });
@@ -910,7 +1057,7 @@ function _recreateNode(nodeData, edgeData) {
   });
   createdMarkers[nodeData.id] = marker;
   // Recreate edges
-  edgeData.forEach(function(ed) { addCreatedEdgeNoUndo(ed.from_id, ed.to_id); });
+  edgeData.forEach(function(ed) { addCreatedEdgeNoUndo(ed.from_id, ed.to_id, { edgeType: ed.edgeType }); });
 }
 
 function getNodeLatLon(id) {
@@ -926,9 +1073,10 @@ function getNodeLatLon(id) {
   return null;
 }
 
-function addCreatedEdge(fromId, toId) {
-  addCreatedEdgeNoUndo(fromId, toId);
-  pushUndo({ type: "create-edge", from_id: fromId, to_id: toId });
+function addCreatedEdge(fromId, toId, edgeType) {
+  edgeType = edgeType || "road";
+  addCreatedEdgeNoUndo(fromId, toId, { edgeType: edgeType });
+  pushUndo({ type: "create-edge", from_id: fromId, to_id: toId, edgeType: edgeType });
   refreshAllEdges();  // endpoints may no longer be isolated
   refreshStats();
 }
@@ -939,20 +1087,25 @@ function addCreatedEdgeNoUndo(fromId, toId, opts) {
   var b = getNodeLatLon(toId);
   if (!a || !b) return;
   var coords = opts.coords || [a, b];
-  var color  = opts.split ? C_SPLIT : C_GREEN;
+  var edgeType = opts.edgeType || "road";
+  var color  = opts.split ? C_SPLIT : (edgeType === "path" ? C_GREEN : C_CYAN);
   var line   = L.polyline(coords, { color: color, weight: 4,  opacity: 1.0, dashArray: "6 4" }).addTo(map);
   var hitbox = L.polyline(coords, { color: color, weight: 18, opacity: 0   }).addTo(map);
-  var cl = { line: line, hitbox: hitbox, from_id: fromId, to_id: toId, split: opts.split, coords: coords };
-  createdEdges.push({ from_id: fromId, to_id: toId });
+  var cl = { line: line, hitbox: hitbox, from_id: fromId, to_id: toId, split: opts.split, edgeType: edgeType, coords: coords };
+  createdEdges.push({ from_id: fromId, to_id: toId, edgeType: edgeType });
   createdLines.push(cl);
-  line.on("click",   function(ev) { L.DomEvent.stopPropagation(ev); onCreatedEdgeClick(cl); });
-  hitbox.on("click", function(ev) { L.DomEvent.stopPropagation(ev); onCreatedEdgeClick(cl); });
+  line.on("click",   function(ev) { L.DomEvent.stopPropagation(ev); onCreatedEdgeClick(cl, ev.latlng); });
+  hitbox.on("click", function(ev) { L.DomEvent.stopPropagation(ev); onCreatedEdgeClick(cl, ev.latlng); });
 }
 
-function onCreatedEdgeClick(cl) {
-  if (mode !== "delete") return;
-  deleteCreatedEdge(cl);
-  refreshStats();
+function onCreatedEdgeClick(cl, latlng) {
+  if (mode === "delete") {
+    deleteCreatedEdge(cl);
+    refreshStats();
+  } else if (mode === "split" && latlng) {
+    splitCreatedEdge(cl, latlng);
+    refreshStats();
+  }
 }
 
 function deleteCreatedEdge(cl) {
@@ -963,7 +1116,7 @@ function deleteCreatedEdge(cl) {
     createdEdges.splice(idx, 1);
     createdLines.splice(idx, 1);
   }
-  pushUndo({ type: "delete-created-edge", from_id: cl.from_id, to_id: cl.to_id });
+  pushUndo({ type: "delete-created-edge", from_id: cl.from_id, to_id: cl.to_id, edgeType: cl.edgeType });
   refreshAllEdges();
 }
 
@@ -1024,15 +1177,16 @@ function splitEdge(key, latlng) {
   var coordsBefore = coords.slice(0, result.segIdx + 1).concat([result.pt]);
   var coordsAfter  = [result.pt].concat(coords.slice(result.segIdx + 1));
 
-  // Mark original edge deleted
+  // Mark original edge hidden (split edges replace it visually)
   deletedEdges[key] = true;
+  splitHiddenEdges[key] = true;
   updateEdgeStyle(key);
 
   // Create split node
   var nodeData = { id: newId, lat: lat, lon: lon, split: true };
   createdNodes.push(nodeData);
   var marker = L.circleMarker([lat, lon], {
-    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0
+    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(newId, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
   marker.on("click", function() { onNodeClick(newId); });
@@ -1043,8 +1197,9 @@ function splitEdge(key, latlng) {
   createdMarkers[newId] = marker;
 
   // Add two sub-edges
-  addCreatedEdgeNoUndo(info.u, newId, { split: true, coords: coordsBefore });
-  addCreatedEdgeNoUndo(newId, info.v, { split: true, coords: coordsAfter });
+  addCreatedEdgeNoUndo(info.u, newId, { split: true, coords: coordsBefore, edgeType: "road" });
+  addCreatedEdgeNoUndo(newId, info.v, { split: true, coords: coordsAfter, edgeType: "road" });
+
 
   pushUndo({
     type: "split",
@@ -1056,7 +1211,81 @@ function splitEdge(key, latlng) {
     coordsBefore: coordsBefore,
     coordsAfter: coordsAfter
   });
-  refreshLoneNodes();
+  refreshAllEdges();
+}
+
+function splitCreatedEdge(cl, latlng) {
+  var coords = cl.coords || [getNodeLatLon(cl.from_id), getNodeLatLon(cl.to_id)];
+  var result = closestPointOnPolyline(latlng, coords);
+  if (!result.pt) return;
+
+  var lat = result.pt[0], lon = result.pt[1];
+  var MIN_DIST = 5;
+  for (var i = 0; i < NODES.length; i++) {
+    if (haversine(lat, lon, NODES[i].lat, NODES[i].lon) < MIN_DIST) {
+      flashWarning("Split point too close to existing node " + NODES[i].id); return;
+    }
+  }
+  for (var i = 0; i < createdNodes.length; i++) {
+    if (haversine(lat, lon, createdNodes[i].lat, createdNodes[i].lon) < MIN_DIST) {
+      flashWarning("Split point too close to created node " + createdNodes[i].id); return;
+    }
+  }
+
+  var newId = "new_" + nextNewId;
+  nextNewId++;
+
+  var coordsBefore = coords.slice(0, result.segIdx + 1).concat([result.pt]);
+  var coordsAfter  = [result.pt].concat(coords.slice(result.segIdx + 1));
+
+  // Save original edge info before removal
+  var fromId = cl.from_id;
+  var toId = cl.to_id;
+  var wasSplit = cl.split;
+  var oldCoords = cl.coords;
+  var oldEdgeType = cl.edgeType;
+
+  // Remove the original created edge
+  map.removeLayer(cl.line);
+  if (cl.hitbox) map.removeLayer(cl.hitbox);
+  var idx = createdLines.indexOf(cl);
+  if (idx >= 0) {
+    createdEdges.splice(idx, 1);
+    createdLines.splice(idx, 1);
+  }
+
+  // Create split node
+  var nodeData = { id: newId, lat: lat, lon: lon, split: true };
+  createdNodes.push(nodeData);
+  var marker = L.circleMarker([lat, lon], {
+    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
+  }).addTo(map);
+  marker.bindTooltip(newId, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
+  marker.on("click", function() { onNodeClick(newId); });
+  marker.on("mouseover", function() {
+    document.getElementById("node-info").textContent =
+      "Split node " + newId + " | lat: " + lat.toFixed(5) + " lon: " + lon.toFixed(5);
+  });
+  createdMarkers[newId] = marker;
+
+  // Add two sub-edges
+  addCreatedEdgeNoUndo(fromId, newId, { split: true, coords: coordsBefore, edgeType: oldEdgeType });
+  addCreatedEdgeNoUndo(newId, toId, { split: true, coords: coordsAfter, edgeType: oldEdgeType });
+
+
+  pushUndo({
+    type: "split-created",
+    newId: newId,
+    nodeData: nodeData,
+    fromId: fromId,
+    toId: toId,
+    wasSplit: wasSplit,
+    oldCoords: oldCoords,
+    edgeType: oldEdgeType,
+    coordsBefore: coordsBefore,
+    coordsAfter: coordsAfter
+  });
+  refreshAllEdges();
 }
 
 /* ══════════════════════════════════════════════
@@ -1089,10 +1318,16 @@ refreshStats();
    ══════════════════════════════════════════════ */
 function doExport() {
   var edgesWithLength = createdEdges.map(function(e) {
-    var a = getNodeLatLon(e.from_id);
-    var b = getNodeLatLon(e.to_id);
-    var length = (a && b) ? haversine(a[0], a[1], b[0], b[1]) : 0;
-    return { from_id: e.from_id, to_id: e.to_id, length: Math.round(length * 100) / 100 };
+    var edgeType = e.edgeType || "road";
+    var length;
+    if (edgeType === "path") {
+      length = 0;
+    } else {
+      var a = getNodeLatLon(e.from_id);
+      var b = getNodeLatLon(e.to_id);
+      length = (a && b) ? haversine(a[0], a[1], b[0], b[1]) : 0;
+    }
+    return { from_id: e.from_id, to_id: e.to_id, length: Math.round(length * 100) / 100, type: edgeType };
   });
 
   var createdNodesOut = createdNodes.map(function(n) {
@@ -1100,8 +1335,9 @@ function doExport() {
   });
 
   var deletedEdgesOut = Object.keys(deletedEdges).map(function(key) {
-    var parts = key.split("-");
-    return { u: parseInt(parts[0]), v: parseInt(parts[1]) };
+    var parts = key.split("_");
+    var uv = parts[0].split("-");
+    return { u: parseInt(uv[0]), v: parseInt(uv[1]), idx: parseInt(parts[1]) };
   });
 
   var payload = {
@@ -1157,6 +1393,7 @@ function applyImport(data) {
   // Reset all state
   deletedIds = {};
   deletedEdges = {};
+  splitHiddenEdges = {};
   includedIds = {};
   startIds = {};
   endIds = {};
@@ -1180,8 +1417,16 @@ function applyImport(data) {
 
   // Apply deleted edges
   (data.deleted_edges || []).forEach(function(de) {
-    var key = Math.min(de.u, de.v) + "-" + Math.max(de.u, de.v);
-    if (key in edgeLineMap) deletedEdges[key] = true;
+    if ('idx' in de) {
+      var key = Math.min(de.u, de.v) + "-" + Math.max(de.u, de.v) + "_" + de.idx;
+      if (key in edgeLineMap) deletedEdges[key] = true;
+    } else {
+      // Backward compat: old format without idx → delete all edges between pair
+      var base = Math.min(de.u, de.v) + "-" + Math.max(de.u, de.v);
+      Object.keys(edgeLineMap).forEach(function(k) {
+        if (k.split("_")[0] === base) deletedEdges[k] = true;
+      });
+    }
   });
 
   // Apply included nodes (also reveal their sec-sec edges)
@@ -1197,7 +1442,7 @@ function applyImport(data) {
 
   // Apply created edges
   (data.created_edges || []).forEach(function(ce) {
-    addCreatedEdgeNoUndo(ce.from_id, ce.to_id);
+    addCreatedEdgeNoUndo(ce.from_id, ce.to_id, { edgeType: ce.type || "road" });
   });
 
   // Apply start/end nodes (support both old single and new multi format)
@@ -1218,7 +1463,7 @@ function createNewNodeFromImport(idx, lat, lon) {
   createdNodes.push({ id: id, lat: lat, lon: lon });
 
   var marker = L.circleMarker([lat, lon], {
-    radius: 7, fillColor: C_GREEN, color: "#fff", weight: 1.5, fillOpacity: 1.0
+    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(id, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
   marker.on("click", function() { onNodeClick(id); });
@@ -1246,5 +1491,7 @@ function haversine(lat1, lon1, lat2, lon2) {
    AUTO-IMPORT (pre-loaded edits from backend)
    ══════════════════════════════════════════════ */
 if (INITIAL_EDITS !== null) { applyImport(INITIAL_EDITS); }
+// Always compute dead-end/lone status on initial load
+refreshAllEdges();
 </script>
 </body></html>
