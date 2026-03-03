@@ -32,21 +32,20 @@ def main():
     print("--- Loading graph ---")
     graph, org_graph = network.load_graph(f"output/{slug}_graph.pickle")
 
-    # 2. Load edits — check output/ first, then ~/Downloads/
+    # 2. Load edits — always copy from ~/Downloads/ if present (most recent),
+    #    then load from output/; warn and proceed with empty edits if absent.
     edits_name = f"{slug}_edits.json"
     edits_path = f"output/{edits_name}"
-    if not os.path.exists(edits_path):
-        downloads = os.path.expanduser(f"~/Downloads/{edits_name}")
-        if os.path.exists(downloads):
-            import shutil
-            shutil.copy2(downloads, edits_path)
-            print(f"  Copied {edits_name} from ~/Downloads/ to output/")
-        else:
-            print(f"  ERROR: {edits_name} not found in output/ or ~/Downloads/")
-            print(f"  Export your edits from the map and try again.")
-            return
-
-    edits = interface.load_edits(edits_path)
+    downloads = os.path.expanduser(f"~/Downloads/{edits_name}")
+    if os.path.exists(downloads):
+        import shutil
+        shutil.copy2(downloads, edits_path)
+        print(f"  Copied {edits_name} from ~/Downloads/ to output/")
+    if os.path.exists(edits_path):
+        edits = interface.load_edits(edits_path)
+    else:
+        print(f"  WARNING: {edits_name} not found in output/ or ~/Downloads/. Proceeding with no edits.")
+        edits = {}
 
     # 3. Apply edits
     graph, start_nodes, end_nodes = interface.apply_edits(graph, edits)
@@ -57,7 +56,7 @@ def main():
         graph, seed=config.SEED,
         start_nodes=start_nodes, end_nodes=end_nodes,
     )
-    best_path, best_dist = path_solver.solve(time_budget=config.TIME_BUDGET)
+    best_path, best_dist = path_solver.solve(time_budget=config.TIME_BUDGET_MINUTES * 60)
 
     if not best_path:
         print("No path found!")

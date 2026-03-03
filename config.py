@@ -29,8 +29,8 @@ CUSTOM_FILTER = (
     '["toll"!~"yes"]'
 )
 
-# Total compute time budget in seconds (1200 = 20 minutes)
-TIME_BUDGET = 1200
+# Total compute time budget in minutes
+TIME_BUDGET_MINUTES = 20
 
 # Random seed for reproducibility
 SEED = 42

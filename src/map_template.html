@@ -117,7 +117,7 @@
       <button class="export-btn" id="export-btn" onclick="doExport()">⬇ Export Edits</button>
     </div>
     <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(event)">
-    <div class="undo-hint">⌘Z / Ctrl+Z to undo</div>
+    <div class="undo-hint">⌘Z / Ctrl+Z to undo · ⌘⇧Z / Ctrl+⇧Z to redo</div>
     <div class="node-info" id="node-info">Hover over a node for details</div>
   </div>
 </div>
@@ -159,8 +159,9 @@ var createdEdges = [];
 var nextNewId    = 0;
 var edgeSource   = null;
 
-// Undo stack: each entry is {type, ...data to reverse}
+// Undo/redo stacks: each entry is {type, ...data to reverse}
 var undoStack = [];
+var redoStack = [];
 var MAX_UNDO  = 200;
 
 // Leaflet
@@ -420,10 +421,14 @@ setMode("delete");
 function pushUndo(action) {
   undoStack.push(action);
   if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack = [];  // new user action clears redo history
 }
 
 document.addEventListener("keydown", function(e) {
-  if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "z" || e.key === "Z")) {
+    e.preventDefault();
+    doRedo();
+  } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "z") {
     e.preventDefault();
     doUndo();
   }
@@ -432,6 +437,7 @@ document.addEventListener("keydown", function(e) {
 function doUndo() {
   if (!undoStack.length) return;
   var a = undoStack.pop();
+  var redoAction = a;  // default: same action re-pushed for redo
 
   if (a.type === "delete-node") {
     delete deletedIds[a.id];
@@ -468,7 +474,12 @@ function doUndo() {
     endIds[a.id] = true;
     updateMarkerStyle(a.id);
   } else if (a.type === "create-node") {
-    // Remove the created node
+    // Capture node data before removing so redo can re-create it
+    var nodeData = null;
+    for (var i = 0; i < createdNodes.length; i++) {
+      if (createdNodes[i].id === a.id) { nodeData = createdNodes[i]; break; }
+    }
+    redoAction = { type: "create-node", id: a.id, nodeData: nodeData };
     removeCreatedNodeNoUndo(a.id);
   } else if (a.type === "create-edge") {
     // Remove last created edge
@@ -478,9 +489,77 @@ function doUndo() {
       createdEdges.pop();
       createdLines.pop();
     }
+    refreshLoneNodes();  // endpoints may now be isolated
   } else if (a.type === "remove-created-node") {
     // Re-create the node
     _recreateNode(a.nodeData, a.edgeData);
+  }
+
+  redoStack.push(redoAction);
+  refreshStats();
+}
+
+function doRedo() {
+  if (!redoStack.length) return;
+  var a = redoStack.pop();
+
+  if (a.type === "delete-node") {
+    deletedIds[a.id] = true;
+    if (a.id in startIds) delete startIds[a.id];
+    if (a.id in endIds) delete endIds[a.id];
+    updateMarkerStyle(a.id);
+    refreshAllEdges();
+    undoStack.push(a);
+  } else if (a.type === "restore-node") {
+    delete deletedIds[a.id];
+    updateMarkerStyle(a.id);
+    refreshAllEdges();
+    undoStack.push(a);
+  } else if (a.type === "delete-edge") {
+    deletedEdges[a.key] = true;
+    refreshAllEdges();
+    undoStack.push(a);
+  } else if (a.type === "restore-edge") {
+    delete deletedEdges[a.key];
+    refreshAllEdges();
+    undoStack.push(a);
+  } else if (a.type === "include") {
+    includedIds[a.id] = true;
+    updateMarkerStyle(a.id);
+    refreshAllEdges();
+    undoStack.push(a);
+  } else if (a.type === "uninclude") {
+    delete includedIds[a.id];
+    updateMarkerStyle(a.id);
+    refreshAllEdges();
+    undoStack.push(a);
+  } else if (a.type === "add-start") {
+    startIds[a.id] = true;
+    updateMarkerStyle(a.id);
+    undoStack.push(a);
+  } else if (a.type === "remove-start") {
+    delete startIds[a.id];
+    updateMarkerStyle(a.id);
+    undoStack.push(a);
+  } else if (a.type === "add-end") {
+    endIds[a.id] = true;
+    updateMarkerStyle(a.id);
+    undoStack.push(a);
+  } else if (a.type === "remove-end") {
+    delete endIds[a.id];
+    updateMarkerStyle(a.id);
+    undoStack.push(a);
+  } else if (a.type === "create-node") {
+    // Re-create the node (nodeData was captured at undo time)
+    if (a.nodeData) _recreateNode(a.nodeData, []);
+    undoStack.push({ type: "create-node", id: a.id });
+  } else if (a.type === "create-edge") {
+    addCreatedEdgeNoUndo(a.from_id, a.to_id);
+    refreshLoneNodes();
+    undoStack.push(a);
+  } else if (a.type === "remove-created-node") {
+    removeCreatedNodeNoUndo(a.id);
+    undoStack.push(a);
   }
 
   refreshStats();
@@ -681,6 +760,7 @@ function removeCreatedNodeNoUndo(id) {
   }
   if (id in startIds) delete startIds[id];
   if (id in endIds) delete endIds[id];
+  refreshLoneNodes();  // connected nodes may now be isolated
 }
 
 function _recreateNode(nodeData, edgeData) {
@@ -716,6 +796,7 @@ function getNodeLatLon(id) {
 function addCreatedEdge(fromId, toId) {
   addCreatedEdgeNoUndo(fromId, toId);
   pushUndo({ type: "create-edge", from_id: fromId, to_id: toId });
+  refreshAllEdges();  // endpoints may no longer be isolated
   refreshStats();
 }
 

@@ -1,20 +1,231 @@
-REFACTOR
- I want to refactor my code. I have written 16 changes i’d like you to implement. Do NOT implement them all at the same time! Before writing code, give me a plan of how you’ll split the code refactor in multiple logically-separated phases. Feel free to ask questions or make suggestions before proceeding. Between each phase, output the updated files so i can test the code. Always explain what you’ll do so i understand changes you made, and why. Give me issue diagnostics before solving problems. {  1- It looks like deleting an edge it the HTML editor deletes the nodes it is connected to. This should not happen! I do not understand why. Investigate the issue. In the HTML file, every node that a degree of at least one should be preserved! NEW (green) EDGES COUNT toward the degree total! A node this only has a green connection (that did not exist in the original map) should NOT be deleted. Nodes with 0 connected edges should be deleted.  2- If the user tries to run “solve.py” and there is no “edits” file, throw a console warning but proceed assuming no graph edits. Also, if there is a file in the download folder with the right name, overwrite the file in the “outputs” folder with it. The downloaded file is always the most recent.  3- Adding a secondary node (grey node) to the main graph should reveal its edges, allowing the user to add the next grey node, et ainsi de suite. It should also update edge colors accordingly.  4- Let’s rethink the “removing dead ends” logic completely. do NOT remove dead ends before creating the HTML file. In the HTML file, display all dead ends in ORANGE (like outside-connection-edges). IMPORTANT: a when counting the degree of a node, do NOT count “les relation unaries”. for exemple, a node X that has one edge connecting it to a node Y and one edge connecting it to itself COUNTS as a dead end. Once the edits file is exported & the “solve.py” scripts runs, before the pathfinding algo starts, THEN implement a recessive fonction to recursively remove all dead-end node! Thus, a node that was a dead end in the original graph but that was manually connected to another node is now NOT a dead-end and should be kept.  5- Before starting the pathfinding algo, export a GPX of the updated graphics to the outputs folder, so the user can check that the graph is valid (useful for debugging).  6- In general, in the HTML file, every selection/node/edge color should be dynamic, recursive, and reflect accurately the changes that’ll be made to the graph.  7- The time budget in the config file should be in minutes - it’s easier for the user. 
- 8- Add more consol logs for phase 3 - right now if i run the algo with a time budget of 1200 secs, there are multiple-minute segments during phase 3 where it looks like nothing is happening.  9- By default, when opening the HTML file automatically, import existing edits if they are in the downloads or outputs folder.  10- Make it impossible to create a new node within a few meter of an existing one.  11- The DELETE option should allow the user to delete a create (green) edge. functionally, there should be no difference between green/blue nodes and edges! (when appropriate, they obv are different in *some* ways)  12- Add a SPLIT option in a side menu. This should give the user the option to add a new (purple) node *ON* an existing edge. When this new node is added, what happens under the hood should be the following: It deletes the existing A-C edge, and creates two new A-B and B-C edges. the new edges should MAP to the old one, NOT be straight lines. Segments that were split should visually appear as PURPLE, even if they are regular new (green) edges under the hood.  13- make the hitboxes of the edges & nodes larger on in the HTML file. they are hard to click.  14- to avoid errors, split the *create node / turn grey node to green* and *create segment* options in the side-menu.  15- add the command-shit-z shortcut that reverses the command-z in the HTML FILE
- 16- Do this last: {  Instead of forcing the algorithm to "Start at Point A and try to find Point B," we are shifting to a flexible goal: "Connect Point A and Point B, starting from whichever side works best."
-By passing both endpoints into the algorithm as valid starting locations, here is how the behavior of the search changes across the board:
-Phase 1: The Initial Fast-Walks
-	•	Current Behavior: The algorithm launches a single, highly predictable "greedy" walk originating strictly from the designated starting point. It blindly gobbles up unvisited streets until it traps itself.
-	•	The Upgrade: By treating both nodes as valid starts, the algorithm will now automatically launch two independent walks—one starting from A, and one starting from B.
-	•	The "Why": This instantly gives us two completely different baseline paths to work with right out of the gate, doubling our chances of getting a high-quality initial route in the first fraction of a second.
-Phase 2: The Randomized "Spray"
-	•	Current Behavior: The algorithm repeatedly drops a pin on the single starting node and sends out thousands of randomized, chaotic walks.
-	•	The Upgrade: The algorithm will now randomly alternate its drop-zone between Node A and Node B before launching those chaotic walks.
-	•	The "Why": If Node A is buried in a dense subdivision with lots of dead ends, the random walks might all get stuck immediately. By splitting the spray between both ends of the route, we ensure that if one node is geographically "trapped," the other node still has thousands of chances to break out and explore the wider neighborhood.
-Phase 3: The Heavy-Duty Exploration (DFS)
-	•	Current Behavior: The algorithm systematically maps out every possible combination of streets, building a massive invisible "tree" of routes radiating outwards from the start node.
-	•	The Upgrade: The time budget will be evenly split. It will spend half its time trying to build the route starting from A. If that gets bogged down in a complex web of streets, the timer forces it to stop, flip the map upside down, and spend the remaining time trying to solve the puzzle starting from B.
-	•	The "Why": Finding a path from A to B is often mathematically much harder than finding that exact same path in reverse (B to A) depending on the layout of the local intersections. This guarantees we don't waste our entire 20-minute budget fighting a bad angle.
+REFACTOR — IMPLEMENTATION PLAN
+═══════════════════════════════════════════════════════════════
 
-This keeps the architecture incredibly simple (KISS) while drastically increasing the algorithm's resilience.
- }}
+16 changes, split into 5 logically-separated phases.
+Do NOT implement all phases at once. Between each phase, output
+updated files so the user can test. Always explain changes and
+give issue diagnostics before solving problems.
+
+
+PHASE 1 — Bug Fixes & Quick Wins [#1, #2, #7, #15]
+─────────────────────────────────────────────────────
+Files: map_template.html, solve.py, config.py
+
+#1 — Edge deletion incorrectly "deletes" connected nodes
+  PROBLEM: Deleting an edge in the HTML editor causes connected nodes to
+  disappear. The user expects only the edge to be removed — every node
+  with at least one remaining connection (including green/created edges)
+  should be preserved. Only truly isolated nodes (0 connections of any
+  kind) should be auto-removed.
+  ROOT CAUSE: refreshLoneNodes() flags any main node with effective
+  degree 0 as a "loneId", and getNodeEffectiveState() maps loneIds to
+  "deleted". When an edge is deleted, its endpoints can drop to degree 0
+  and get swept into loneIds — appearing deleted even though the user
+  never deleted them.
+  FIX: loneIds must only flag nodes that have zero connections across
+  BOTH original (non-deleted) edges AND created (green) edges. A node
+  with even one green connection must NOT be flagged. Verify
+  getEffectiveDegree() counts created edges properly, and ensure loneIds
+  never override user-created connections. Green edges count toward
+  degree in all contexts.
+
+#2 — Missing edits file should warn, not crash
+  PROBLEM: Running solve.py without an edits file crashes.
+  FIX: If no edits file exists in output/ or ~/Downloads/, print a
+  console warning and proceed with an empty edits dict (no deletes, no
+  creates, no start/end). If a file exists in ~/Downloads/ with the
+  right name, always copy it to output/ (overwriting), since the
+  downloaded file is always the most recent.
+
+#7 — Time budget in minutes
+  PROBLEM: TIME_BUDGET is in seconds, which is unintuitive for the user.
+  FIX: Rename to TIME_BUDGET_MINUTES, default 20. In solve.py, convert:
+  time_budget=config.TIME_BUDGET_MINUTES * 60.
+
+#15 — Cmd-Shift-Z redo shortcut in the HTML file
+  FIX: Add a redoStack array. Each doUndo() pushes the reversed action
+  onto redoStack. Each new user action clears redoStack. Cmd-Shift-Z /
+  Ctrl-Shift-Z pops from redoStack and re-applies the action.
+
+
+PHASE 2 — Dead-End Logic Rethink [#4, #5]
+──────────────────────────────────────────
+Files: network.py, prepare.py, solve.py, interface.py, map_template.html, export.py
+
+#4 — Rethink dead-end removal entirely
+  PROBLEM: Dead ends are pruned in prepare.py BEFORE the HTML map is
+  generated. The user never sees them and can't decide what to do with
+  them. Dead-end removal should happen later, after the user has had a
+  chance to manually connect them.
+  DEFINITION: A dead end is a node with effective degree <= 1. Self-loops
+  ("relations unaires", i.e. edges where u == v) do NOT count toward
+  degree. A node with one real neighbor and one self-loop IS a dead end.
+  NEW BEHAVIOR:
+    a) Remove the prune_dead_ends() call from prepare.py entirely. Pass
+       the full unpruned graph to the HTML generator.
+    b) In the HTML map, display dead-end nodes in ORANGE (same color as
+       boundary-crossing edges). Dead-end coloring must be dynamic and
+       recursive: if the user connects a dead-end to another node via a
+       green edge, it is no longer a dead end and its color updates
+       immediately. Conversely, deleting an edge that makes a node become
+       a dead end should turn it orange instantly.
+    c) In solve.py, AFTER applying user edits (interface.apply_edits) but
+       BEFORE the pathfinding algo, add a recursive function to remove
+       all dead-end nodes. This iteratively removes nodes with degree <= 1
+       (ignoring self-loops) until no dead ends remain. Nodes that were
+       dead ends in the original graph but were manually connected by the
+       user will have degree >= 2 and survive the pruning.
+
+#5 — Pre-solve debug GPX export
+  FIX: After edits are applied and dead-ends pruned in solve.py, but
+  BEFORE the pathfinding algo starts, export a GPX of all edges in the
+  final graph to output/{slug}_debug_graph.gpx. The user can load this
+  in a mapping app to verify the graph is valid before waiting 20 min
+  for the solver. One <trk> per edge or one big multitrack.
+
+
+PHASE 3 — HTML Editor Modes & UX [#14, #11, #13, #10]
+──────────────────────────────────────────────────────
+Files: map_template.html
+
+#14 — Split "Create" into two separate side-menu options
+  PROBLEM: The single "Create" mode handles three distinct actions (place
+  new node, include grey node, draw edge), which is confusing and
+  error-prone.
+  FIX: Replace the single "Create" button with two buttons:
+    - "Add Node" (green) — click empty space to create a green node;
+      click a grey node to include it (turn it green).
+    - "Draw Edge" (green) — click two existing nodes to draw an edge
+      between them.
+  Update the mode grid layout accordingly (may need 3-col or extra row
+  for 5+ buttons).
+
+#11 — Allow deleting created (green) edges
+  PROBLEM: Delete mode only works on original (blue/orange) edges via
+  edgeLineMap. Created green edges in createdLines are not clickable
+  for deletion.
+  FIX: Make created edge polylines respond to click events in delete
+  mode. On click, remove the edge from createdEdges/createdLines and
+  remove the polyline from the map. Push to undo stack. There should be
+  no functional difference between green and blue nodes/edges for
+  deletion purposes (they obviously differ in other ways — color,
+  origin — but deletion treats them identically).
+
+#13 — Larger hitboxes for edges and nodes
+  PROBLEM: Edges and nodes are hard to click on the map.
+  FIX: Increase node marker radius from 5 to 7 for main nodes. For
+  edges, add invisible wider polylines (weight: 16-20, opacity: 0)
+  underneath visible ones to act as click targets. This is the standard
+  Leaflet pattern for making thin lines easier to click.
+
+#10 — Prevent creating a new node within a few meters of an existing one
+  FIX: Before placing a new node, compute haversine distance to every
+  existing node (original + created). If any node is within ~5 meters,
+  reject the placement and optionally flash a brief warning. This
+  prevents accidental duplicate nodes that cause graph issues.
+
+
+PHASE 4 — Advanced HTML Features [#3, #6, #9, #12]
+───────────────────────────────────────────────────
+Files: map_template.html, interface.py
+
+#3 — Including a grey node reveals its edges for chain-inclusion
+  PROBLEM: When a secondary (grey) node is included, it turns green,
+  but its edges to other grey nodes remain hidden. The user can't see
+  or reach the next layer of grey nodes.
+  FIX: When a secondary node is included, iterate over EDGES to find
+  all edges connected to it. Draw those edges on the map, colored by
+  endpoint state: both included = green, one included + one secondary
+  = orange. Update edge colors dynamically via the standard refresh
+  logic. This lets the user chain-include grey nodes one layer at a
+  time, extending the graph into secondary territory.
+
+#6 — All colors should be dynamic, recursive, and accurate
+  PROBLEM: Node and edge colors must reflect the actual state of the
+  graph at all times, accounting for every feature (dead-end orange,
+  split purple, revealed secondary edges, created green, etc.).
+  FIX: Audit every user action to ensure it triggers a full refresh
+  of affected node/edge colors. The color priority cascade is:
+    Start/End > Deleted (red) > Dead-end (orange) > Included (green)
+    > Created (green) > Main (blue) > Secondary (grey)
+  Edge colors derive from their endpoint states. Purple (split) is
+  cosmetic only — underneath, split edges are standard green.
+
+#9 — Auto-import existing edits when opening the HTML file
+  PROBLEM: Every time the user re-runs prepare.py and opens the map,
+  they lose all previous edits unless they manually re-import.
+  CHALLENGE: Local file:// pages can't fetch adjacent files via JS.
+  SOLUTION: In interface.py's generate_map_html(), check if an edits
+  JSON file already exists in output/ or ~/Downloads/. If so, read it
+  and inject it into the HTML as a JS variable (same pattern as NODES
+  and EDGES are injected). On page load, if this variable is non-null,
+  call applyImport() automatically. The manual Import button remains
+  as a fallback for loading different edit files.
+
+#12 — SPLIT tool: add a new node ON an existing edge
+  NEW MODE: Add a "Split" button (purple) to the side menu.
+  BEHAVIOR: In split mode, user clicks an existing edge. A new purple
+  node is created at the closest point on the edge geometry to the
+  click location. Under the hood:
+    a) The original A-C edge is deleted (added to deletedEdges).
+    b) Two new edges A-B and B-C are created. These edges FOLLOW the
+       original edge's curved road geometry, split at the click point.
+       They are NOT straight lines.
+    c) The new node and its two sub-edges are colored PURPLE visually,
+       but internally they are standard created (green) nodes/edges.
+       A "split" flag controls the purple rendering only.
+    d) All normal operations (delete, undo, start/end, etc.) work on
+       purple nodes/edges identically to green ones.
+
+
+PHASE 5 — Solver Enhancements [#8, #16]
+────────────────────────────────────────
+Files: solver.py
+
+#8 — More console logs during Phase 3
+  PROBLEM: With a 20-min time budget, there are multi-minute stretches
+  during Phase 3 (backtracking DFS) where it looks like nothing is
+  happening.
+  FIX: During backtracking_dfs(), add a time-based progress log. Every
+  ~30 seconds, print a status line showing: elapsed time, current DFS
+  start node index, current best distance, and number of backtrack
+  operations performed.
+
+#16 — Bidirectional solver (implement LAST)
+  OVERVIEW: Instead of "start at A, find B," shift to "connect A and B,
+  starting from whichever side works best." By passing both endpoints
+  into the algorithm as valid starting locations, the search becomes
+  much more resilient. This only activates when BOTH start_nodes and
+  end_nodes are set by the user. If only one or neither is set, the
+  solver behaves exactly as before.
+
+  Phase 1 — Initial Fast-Walks:
+    CURRENT: One greedy walk from the designated start.
+    UPGRADE: Launch deterministic Warnsdorff walks from BOTH start_nodes
+    AND end_nodes — two independent walks. Walks originating from end
+    nodes are reversed before validation (start constraint checked at
+    path[0], end at path[-1]). Doubles the baseline paths instantly.
+
+  Phase 2 — Randomized Spray:
+    CURRENT: Thousands of randomized walks all launched from start nodes.
+    UPGRADE: Randomly alternate the drop-zone between start_nodes and
+    end_nodes before each walk. Same reversal logic for end-originated
+    walks. If one endpoint is geographically trapped (dense subdivision,
+    dead ends), the other still gets thousands of chances to explore.
+
+  Phase 3 — Heavy-Duty DFS:
+    CURRENT: Systematic backtracking DFS radiating from start nodes only.
+    UPGRADE: Split the Phase 3 time budget in half. First half: DFS from
+    start nodes (normal). Second half: DFS from end nodes with the graph
+    "flipped" — treat end_nodes as starts and start_nodes as ends, then
+    reverse the resulting path. Finding A→B is often much harder than
+    B→A depending on intersection layout. This guarantees we don't burn
+    the entire budget fighting a bad direction.
+
+  Phase 4 — Local Search:
+    No changes needed. It already works on the best path regardless of
+    which direction produced it.
+
+  KISS: This keeps the architecture simple — no new data structures, no
+  bidirectional search merging. Just run the same algorithm twice from
+  opposite ends and keep the better result.
