@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
+
+# Claude worktrees
+.claude/worktrees/
+
+# Project outputs (large / generated files)
+output/*.pickle
+output/*.gpx
+output/*.png
+output/*.html
+cache/

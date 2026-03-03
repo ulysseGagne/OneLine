@@ -87,67 +87,6 @@ def download_graph(main_boundary, custom_filter, margin_meters=500):
     return org_graph, graph
 
 
-def prune_dead_ends(graph):
-    """
-    Iteratively remove dead-end nodes (degree 1) from the main neighborhood,
-    but KEEP dead-ends that connect to secondary neighborhood nodes
-    (i.e., they are border connectors).
-    """
-    print("\n--- Pruning dead-ends (preserving border connectors) ---")
-    total_pruned = 0
-
-    while True:
-        to_remove = []
-        for n, deg in graph.degree():
-            if deg != 1:
-                continue
-            # Only prune main-neighborhood dead-ends
-            if not graph.nodes[n].get("is_main", False):
-                continue
-            # Check if this dead-end's single neighbor is secondary
-            neighbor = next(iter(graph.neighbors(n)))
-            if not graph.nodes[neighbor].get("is_main", True):
-                # This dead-end connects to a secondary node — keep it
-                continue
-            to_remove.append(n)
-
-        if not to_remove:
-            break
-
-        graph.remove_nodes_from(to_remove)
-        total_pruned += len(to_remove)
-
-    # Remove isolated nodes
-    isolates = list(nx.isolates(graph))
-    if isolates:
-        graph.remove_nodes_from(isolates)
-        total_pruned += len(isolates)
-
-    print(f"  Pruned {total_pruned} dead-end nodes")
-
-    # Keep only the largest connected component
-    if not nx.is_connected(graph):
-        largest_cc = max(nx.connected_components(graph), key=len)
-        removed = graph.number_of_nodes() - len(largest_cc)
-        graph = graph.subgraph(largest_cc).copy()
-        print(f"  Removed {removed} nodes from disconnected components")
-
-    main_count = sum(1 for n in graph.nodes() if graph.nodes[n].get("is_main"))
-    sec_count = graph.number_of_nodes() - main_count
-    print(f"  Final graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
-    print(f"    Main: {main_count}, Secondary: {sec_count}")
-
-    # Diagnostic: count boundary-crossing edges after pruning
-    cross_edges = 0
-    for u, v in graph.edges():
-        u_main = graph.nodes[u].get("is_main", False)
-        v_main = graph.nodes[v].get("is_main", False)
-        if u_main != v_main:
-            cross_edges += 1
-    print(f"    Boundary-crossing edges (main↔secondary): {cross_edges}")
-
-    return graph
-
 
 def remove_dead_ends(graph, protected=None):
     """
