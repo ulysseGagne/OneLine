@@ -149,6 +149,39 @@ def prune_dead_ends(graph):
     return graph
 
 
+def remove_dead_ends(graph, protected=None):
+    """
+    Iteratively remove nodes with effective degree <= 1 (self-loops excluded).
+    Called in solve.py after user edits are applied, before pathfinding.
+
+    Nodes that were dead-ends originally but were manually connected by the
+    user will have degree >= 2 and survive. protected is an optional set of
+    node IDs (e.g. start/end) that must never be removed.
+    """
+    protected = protected or set()
+    print("\n--- Removing dead-ends ---")
+    total_removed = 0
+
+    while True:
+        to_remove = []
+        for n in list(graph.nodes()):
+            if n in protected:
+                continue
+            # Count edges excluding self-loops
+            real_deg = sum(1 for _, v in graph.edges(n) if v != n)
+            if real_deg <= 1:
+                to_remove.append(n)
+        if not to_remove:
+            break
+        graph.remove_nodes_from(to_remove)
+        total_removed += len(to_remove)
+
+    main_count = sum(1 for n in graph.nodes() if graph.nodes[n].get("is_main"))
+    print(f"  Removed {total_removed} dead-end nodes, {graph.number_of_nodes()} remaining "
+          f"({main_count} main)")
+    return graph
+
+
 def save_graph(graph, org_graph, filepath="output/graph.pickle"):
     """Save the processed graph and original directed graph to disk."""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
