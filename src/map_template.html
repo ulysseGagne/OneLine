@@ -316,6 +316,10 @@ function updateMarkerStyle(id) {
       fillColor: getNodeColor(id), color: getNodeBorder(id),
       weight: getNodeBorderWidth(id), radius: getNodeRadius(id)
     });
+    // Re-apply draw-mode highlight if this node is the current edge source
+    if (edgeSource === id) {
+      m.setStyle({ color: getNodeColor(id), weight: 3, radius: getNodeRadius(id) + 3 });
+    }
   }
 }
 
@@ -414,8 +418,9 @@ function updateEdgeStyle(key) {
     return;
   }
 
-  // One active main, one secondary → orange
-  if (uState === "main" || vState === "main") {
+  // One active main/green, one secondary → orange
+  if (uState === "main" || vState === "main" ||
+      uState === "green" || vState === "green") {
     info.line.setStyle({ color: C_EDGE_MIX, opacity: 1.0, dashArray: null, weight: 4 });
     return;
   }
@@ -555,6 +560,7 @@ var HINTS = {
 
 function setMode(m) {
   mode = m;
+  window._markerClickFlag = false;
   clearEdgeSource();
   var modes = ["delete", "add-node", "draw-road", "draw-path", "split", "start", "end"];
   modes.forEach(function(b) {
@@ -615,15 +621,19 @@ function doUndo() {
   } else if (a.type === "add-start") {
     delete startIds[a.id];
     updateMarkerStyle(a.id);
+    refreshAllEdges();
   } else if (a.type === "remove-start") {
     startIds[a.id] = true;
     updateMarkerStyle(a.id);
+    refreshAllEdges();
   } else if (a.type === "add-end") {
     delete endIds[a.id];
     updateMarkerStyle(a.id);
+    refreshAllEdges();
   } else if (a.type === "remove-end") {
     endIds[a.id] = true;
     updateMarkerStyle(a.id);
+    refreshAllEdges();
   } else if (a.type === "create-node") {
     // Capture node data before removing so redo can re-create it
     var nodeData = null;
@@ -706,18 +716,22 @@ function doRedo() {
   } else if (a.type === "add-start") {
     startIds[a.id] = true;
     updateMarkerStyle(a.id);
+    refreshAllEdges();
     undoStack.push(a);
   } else if (a.type === "remove-start") {
     delete startIds[a.id];
     updateMarkerStyle(a.id);
+    refreshAllEdges();
     undoStack.push(a);
   } else if (a.type === "add-end") {
     endIds[a.id] = true;
     updateMarkerStyle(a.id);
+    refreshAllEdges();
     undoStack.push(a);
   } else if (a.type === "remove-end") {
     delete endIds[a.id];
     updateMarkerStyle(a.id);
+    refreshAllEdges();
     undoStack.push(a);
   } else if (a.type === "create-node") {
     // Re-create the node (nodeData was captured at undo time)
@@ -943,6 +957,7 @@ function handleStart(id) {
     pushUndo({ type: "add-start", id: id });
   }
   updateMarkerStyle(id);
+  refreshAllEdges();
 }
 
 /* ── END (multi) ── */
@@ -961,6 +976,7 @@ function handleEnd(id) {
     pushUndo({ type: "add-end", id: id });
   }
   updateMarkerStyle(id);
+  refreshAllEdges();
 }
 
 /* ══════════════════════════════════════════════

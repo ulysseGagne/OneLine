@@ -1,0 +1,1 @@
+1- revealed grey edges are green for some reason. make them grey like grey nodes. 2- loop-edges (always orange) should dynamically toggle to red if their node is updated to red (deleted). 3- start/end nodes count as blue-nodes even if they are dead ends. dynamically update the edge of connected edges accordingly.
