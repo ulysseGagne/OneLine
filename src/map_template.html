@@ -31,10 +31,11 @@
   }
   .mode-btn:hover { border-color: #999; background: #fafafa; }
   .mode-btn.active-delete    { border-color: #f00; background: #fee; color: #c00; }
-  .mode-btn.active-add-node  { border-color: #a855f7; background: #ede9fe; color: #5b21b6; }
+  .mode-btn.active-add-node  { border-color: #0cc; background: #d0fffe; color: #077; }
   .mode-btn.active-draw-road { border-color: #0cc; background: #d0fffe; color: #077; }
   .mode-btn.active-draw-path { border-color: #080; background: #ded; color: #050; }
-  .mode-btn.active-split     { border-color: #7c3aed; background: #ede9fe; color: #5b21b6; }
+  .mode-btn.active-split     { border-color: #0cc; background: #d0fffe; color: #077; }
+  .mode-grid > :first-child  { grid-column: 1 / -1; }
   .mode-btn.active-start     { border-color: #333; background: #f0f0f0; color: #000; }
   .mode-btn.active-end       { border-color: #333; background: #f0f0f0; color: #333; }
   .color-dot {
@@ -98,8 +99,11 @@
       <div class="mode-btn active-delete" id="btn-delete" onclick="setMode('delete')">
         <span class="color-dot" style="background:#f00"></span> Delete
       </div>
-      <div class="mode-btn" id="btn-add-node" onclick="setMode('add-node')">
-        <span class="color-dot" style="background:#a855f7"></span> Add Node
+      <div class="mode-btn" id="btn-start" onclick="setMode('start')">
+        <span class="color-dot" style="background:#000"></span> Start
+      </div>
+      <div class="mode-btn" id="btn-end" onclick="setMode('end')">
+        <span class="color-dot white"></span> End
       </div>
       <div class="mode-btn" id="btn-draw-road" onclick="setMode('draw-road')">
         <span class="color-dot" style="background:#0cc"></span> Draw Road
@@ -107,14 +111,11 @@
       <div class="mode-btn" id="btn-draw-path" onclick="setMode('draw-path')">
         <span class="color-dot" style="background:#080"></span> Draw Path
       </div>
+      <div class="mode-btn" id="btn-add-node" onclick="setMode('add-node')">
+        <span class="color-dot" style="background:#0cc"></span> Add Node
+      </div>
       <div class="mode-btn" id="btn-split" onclick="setMode('split')">
-        <span class="color-dot" style="background:#a855f7"></span> Split
-      </div>
-      <div class="mode-btn" id="btn-start" onclick="setMode('start')">
-        <span class="color-dot" style="background:#000"></span> Start
-      </div>
-      <div class="mode-btn" id="btn-end" onclick="setMode('end')">
-        <span class="color-dot white"></span> End
+        <span class="color-dot" style="background:#0cc"></span> Split
       </div>
     </div>
 
@@ -125,8 +126,8 @@
     <div class="stats" id="stats"></div>
 
     <div style="display:flex;gap:6px">
-      <button class="export-btn" id="import-btn" onclick="doImport()" style="background:#444">⬆ Import Edits</button>
-      <button class="export-btn" id="export-btn" onclick="doExport()">⬇ Export Edits</button>
+      <button class="export-btn" id="import-btn" onclick="doImport()" style="background:#444">⬆ Import</button>
+      <button class="export-btn" id="export-btn" onclick="doExport()">⬇ Export</button>
     </div>
     <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(event)">
     <div class="undo-hint">⌘Z / Ctrl+Z to undo · ⌘⇧Z / Ctrl+⇧Z to redo</div>
@@ -152,7 +153,6 @@ var C_SECONDARY = "#e8e8e8";
 var C_DELETED   = "#f00";
 var C_GREEN     = "#080";
 var C_CYAN      = "#0cc";
-var C_SPLIT     = "#a855f7";
 var C_START     = "#000";
 var C_END       = "#fff";
 var C_EDGE_MAIN = "#06f";
@@ -247,9 +247,13 @@ NODES.forEach(function(n) {
 
 // Map click for add-node mode
 map.on("click", function(e) {
-  if (mode !== "add-node") return;
   // Marker clicks set this flag; small timeout to handle race condition
   if (window._markerClickFlag) { window._markerClickFlag = false; return; }
+  // Background click clears edge source selection in draw modes
+  if ((mode === "draw-road" || mode === "draw-path") && edgeSource !== null) {
+    clearEdgeSource(); return;
+  }
+  if (mode !== "add-node") return;
   createNewNode(e.latlng.lat, e.latlng.lng);
 });
 
@@ -265,9 +269,9 @@ function getNodeColor(id) {
   if (id in includedIds) return C_GREEN;
   var n = getNodeData(id);
   if (!n) {
-    // Created node — check if it's a split (purple) node
+    // Created node — check if it's a split node
     for (var i = 0; i < createdNodes.length; i++) {
-      if (createdNodes[i].id === id && createdNodes[i].split) return C_SPLIT;
+      if (createdNodes[i].id === id && createdNodes[i].split) return C_CYAN;
     }
     return getCreatedNodeColor(id);
   }
@@ -286,7 +290,7 @@ function getCreatedNodeColor(id) {
   }
   if (hasRoad) return C_CYAN;
   if (hasPath) return C_GREEN;
-  return C_SPLIT;  // no edges — purple
+  return C_DELETED;  // no edges — red (isolated)
 }
 
 function getNodeBorder(id) {
@@ -439,13 +443,15 @@ function refreshAllEdges() {
   refreshLoneNodes();
   Object.keys(edgeLineMap).forEach(updateEdgeStyle);
   refreshCreatedEdgeStyles();
+  // Refresh all created node colors (edge-dependent)
+  createdNodes.forEach(function(cn) { updateMarkerStyle(cn.id); });
 }
 
 function refreshCreatedEdgeStyles() {
   createdLines.forEach(function(cl) {
     var fromState = getNodeEffectiveState(cl.from_id);
     var toState = getNodeEffectiveState(cl.to_id);
-    var baseColor = cl.split ? C_SPLIT : (cl.edgeType === "path" ? C_GREEN : C_CYAN);
+    var baseColor = cl.split ? C_CYAN : (cl.edgeType === "path" ? C_GREEN : C_CYAN);
 
     if (fromState === "deleted" || toState === "deleted") {
       cl.line.setStyle({ color: C_DELETED, opacity: 1.0, dashArray: "6 4", weight: 4 });
@@ -550,10 +556,10 @@ function refreshLoneNodes() {
    ══════════════════════════════════════════════ */
 var HINTS = {
   "delete":    "<b>Click a node</b> to delete/restore it (<span style='color:#f00'>red</span>). <b>Click an edge</b> to delete/restore it.",
-  "add-node":  "<b>Click empty space</b> to place a <span style='color:#a855f7'>purple</span> node. <b>Click a grey node</b> to include it.",
+  "add-node":  "<b>Click empty space</b> to place a <span style='color:#0cc'>cyan</span> node. <b>Click a grey node</b> to include it.",
   "draw-road": "<b>Click two nodes</b> to draw a <span style='color:#0cc'>cyan road</span> edge between them.",
   "draw-path": "<b>Click two nodes</b> to draw a <span style='color:#080'>green path</span> edge (zero distance).",
-  "split":     "<b>Click an edge</b> to <span style='color:#a855f7'>split</span> it at the nearest point, inserting a new node.",
+  "split":     "<b>Click an edge</b> to <span style='color:#0cc'>split</span> it at the nearest point, inserting a new node.",
   "start":     "<b>Click</b> main/included nodes to toggle them as <b>START</b> (●). Multiple allowed.",
   "end":       "<b>Click</b> main/included nodes to toggle them as <b>END</b> (○). Multiple allowed."
 };
@@ -763,7 +769,7 @@ function doRedo() {
     splitHiddenEdges[a.key] = true;
     createdNodes.push(a.nodeData);
     var sm = L.circleMarker([a.nodeData.lat, a.nodeData.lon], {
-      radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
+      radius: 7, fillColor: C_CYAN, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
     }).addTo(map);
     sm.bindTooltip(a.newId, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
     (function(nid, nd) {
@@ -791,7 +797,7 @@ function doRedo() {
     }
     createdNodes.push(a.nodeData);
     var sm = L.circleMarker([a.nodeData.lat, a.nodeData.lon], {
-      radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
+      radius: 7, fillColor: C_CYAN, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
     }).addTo(map);
     sm.bindTooltip(a.newId, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
     (function(nid, nd) {
@@ -1009,7 +1015,7 @@ function createNewNode(lat, lon) {
   createdNodes.push({ id: id, lat: lat, lon: lon });
 
   var marker = L.circleMarker([lat, lon], {
-    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
+    radius: 7, fillColor: C_DELETED, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(id, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
   marker.on("click", function() { onNodeClick(id); });
@@ -1063,7 +1069,7 @@ function _recreateNode(nodeData, edgeData) {
   if (!nodeData) return;
   createdNodes.push(nodeData);
   var marker = L.circleMarker([nodeData.lat, nodeData.lon], {
-    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
+    radius: 7, fillColor: C_CYAN, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(nodeData.id, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
   marker.on("click", function() { onNodeClick(nodeData.id); });
@@ -1104,7 +1110,7 @@ function addCreatedEdgeNoUndo(fromId, toId, opts) {
   if (!a || !b) return;
   var coords = opts.coords || [a, b];
   var edgeType = opts.edgeType || "road";
-  var color  = opts.split ? C_SPLIT : (edgeType === "path" ? C_GREEN : C_CYAN);
+  var color  = opts.split ? C_CYAN : (edgeType === "path" ? C_GREEN : C_CYAN);
   var line   = L.polyline(coords, { color: color, weight: 4,  opacity: 1.0, dashArray: "6 4" }).addTo(map);
   var hitbox = L.polyline(coords, { color: color, weight: 18, opacity: 0   }).addTo(map);
   var cl = { line: line, hitbox: hitbox, from_id: fromId, to_id: toId, split: opts.split, edgeType: edgeType, coords: coords };
@@ -1202,7 +1208,7 @@ function splitEdge(key, latlng) {
   var nodeData = { id: newId, lat: lat, lon: lon, split: true };
   createdNodes.push(nodeData);
   var marker = L.circleMarker([lat, lon], {
-    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
+    radius: 7, fillColor: C_CYAN, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(newId, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
   marker.on("click", function() { onNodeClick(newId); });
@@ -1274,7 +1280,7 @@ function splitCreatedEdge(cl, latlng) {
   var nodeData = { id: newId, lat: lat, lon: lon, split: true };
   createdNodes.push(nodeData);
   var marker = L.circleMarker([lat, lon], {
-    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
+    radius: 7, fillColor: C_CYAN, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(newId, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
   marker.on("click", function() { onNodeClick(newId); });
@@ -1333,17 +1339,23 @@ refreshStats();
    EXPORT
    ══════════════════════════════════════════════ */
 function doExport() {
-  var edgesWithLength = createdEdges.map(function(e) {
+  var edgesWithLength = createdEdges.map(function(e, i) {
     var edgeType = e.edgeType || "road";
+    var cl = createdLines[i];
+    var coords = cl ? cl.coords : null;
     var length;
     if (edgeType === "path") {
       length = 0;
+    } else if (coords && coords.length > 2) {
+      length = polylineLength(coords);
     } else {
       var a = getNodeLatLon(e.from_id);
       var b = getNodeLatLon(e.to_id);
       length = (a && b) ? haversine(a[0], a[1], b[0], b[1]) : 0;
     }
-    return { from_id: e.from_id, to_id: e.to_id, length: Math.round(length * 100) / 100, type: edgeType };
+    var out = { from_id: e.from_id, to_id: e.to_id, length: Math.round(length * 100) / 100, type: edgeType };
+    if (coords && coords.length > 2) out.coords = coords;
+    return out;
   });
 
   var createdNodesOut = createdNodes.map(function(n) {
@@ -1363,7 +1375,8 @@ function doExport() {
     created_edges: edgesWithLength,
     included_ids:  Object.keys(includedIds).map(Number).sort(function(a,b){return a-b;}),
     start_ids:     Object.keys(startIds).map(function(x){ return isNaN(x) ? x : Number(x); }),
-    end_ids:       Object.keys(endIds).map(function(x){ return isNaN(x) ? x : Number(x); })
+    end_ids:       Object.keys(endIds).map(function(x){ return isNaN(x) ? x : Number(x); }),
+    split_hidden_edges: Object.keys(splitHiddenEdges)
   };
 
   var json = JSON.stringify(payload, null, 2);
@@ -1376,7 +1389,7 @@ function doExport() {
 
   var btn = document.getElementById("export-btn");
   btn.textContent = "✓ Exported!"; btn.classList.add("exported");
-  setTimeout(function() { btn.textContent = "⬇ Export Edits"; btn.classList.remove("exported"); }, 2000);
+  setTimeout(function() { btn.textContent = "⬇ Export"; btn.classList.remove("exported"); }, 2000);
 }
 
 /* ══════════════════════════════════════════════
@@ -1396,7 +1409,7 @@ function handleImportFile(event) {
       applyImport(data);
       var btn = document.getElementById("import-btn");
       btn.textContent = "✓ Imported!";
-      setTimeout(function() { btn.textContent = "⬆ Import Edits"; }, 2000);
+      setTimeout(function() { btn.textContent = "⬆ Import"; }, 2000);
     } catch (err) {
       alert("Invalid JSON file: " + err.message);
     }
@@ -1458,8 +1471,51 @@ function applyImport(data) {
 
   // Apply created edges
   (data.created_edges || []).forEach(function(ce) {
-    addCreatedEdgeNoUndo(ce.from_id, ce.to_id, { edgeType: ce.type || "road" });
+    addCreatedEdgeNoUndo(ce.from_id, ce.to_id, { edgeType: ce.type || "road", coords: ce.coords });
   });
+
+  // Restore split-hidden edges
+  if (data.split_hidden_edges) {
+    // New format: explicit list
+    data.split_hidden_edges.forEach(function(key) {
+      if (key in edgeLineMap) splitHiddenEdges[key] = true;
+    });
+  } else {
+    // Old files: heuristic — a deleted edge is split-hidden if created edges
+    // form a path from u to v through created nodes
+    var adj = {};
+    createdEdges.forEach(function(ce) {
+      var f = String(ce.from_id), t = String(ce.to_id);
+      if (!adj[f]) adj[f] = [];
+      if (!adj[t]) adj[t] = [];
+      adj[f].push(t);
+      adj[t].push(f);
+    });
+    Object.keys(deletedEdges).forEach(function(key) {
+      var parts = key.split("_");
+      var uv = parts[0].split("-");
+      var u = String(parseInt(uv[0]));
+      var v = String(parseInt(uv[1]));
+      // BFS from u to v through created nodes only
+      var visited = {};
+      var queue = [u];
+      visited[u] = true;
+      var found = false;
+      while (queue.length > 0 && !found) {
+        var curr = queue.shift();
+        var neighbors = adj[curr] || [];
+        for (var i = 0; i < neighbors.length; i++) {
+          var nb = neighbors[i];
+          if (nb === v) { found = true; break; }
+          if (!visited[nb] && nb.indexOf("new_") === 0) {
+            visited[nb] = true;
+            queue.push(nb);
+          }
+        }
+      }
+      if (found) splitHiddenEdges[key] = true;
+    });
+  }
 
   // Apply start/end nodes (support both old single and new multi format)
   var starts = data.start_ids || (data.start_id != null ? [data.start_id] : []);
@@ -1479,7 +1535,7 @@ function createNewNodeFromImport(idx, lat, lon) {
   createdNodes.push({ id: id, lat: lat, lon: lon });
 
   var marker = L.circleMarker([lat, lon], {
-    radius: 7, fillColor: C_SPLIT, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
+    radius: 7, fillColor: C_DELETED, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(id, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
   marker.on("click", function() { onNodeClick(id); });
@@ -1501,6 +1557,14 @@ function haversine(lat1, lon1, lat2, lon2) {
           Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
           Math.sin(dLon/2) * Math.sin(dLon/2);
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function polylineLength(coords) {
+  var total = 0;
+  for (var i = 0; i < coords.length - 1; i++) {
+    total += haversine(coords[i][0], coords[i][1], coords[i+1][0], coords[i+1][1]);
+  }
+  return total;
 }
 
 /* ══════════════════════════════════════════════
