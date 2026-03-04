@@ -17,6 +17,21 @@ def edge_path_to_coordinates(G_dir, G_undir, edge_path):
                     coords.extend((lat, lon) for lon, lat in pts)
                     found = True
                     break
+        # 2. Fall back to the modified undirected graph (split/created edges)
+        if not found and G_undir.has_edge(u, v):
+            edata = G_undir[u][v].get(k, list(G_undir[u][v].values())[0])
+            if edata and "geometry" in edata:
+                pts = list(edata["geometry"].coords)
+                # Undirected graph: check if first point is nearer u or v
+                u_x, u_y = G_undir.nodes[u]["x"], G_undir.nodes[u]["y"]
+                v_x, v_y = G_undir.nodes[v]["x"], G_undir.nodes[v]["y"]
+                d_to_u = abs(pts[0][0] - u_x) + abs(pts[0][1] - u_y)
+                d_to_v = abs(pts[0][0] - v_x) + abs(pts[0][1] - v_y)
+                if d_to_u > d_to_v:
+                    pts = pts[::-1]
+                coords.extend((lat, lon) for lon, lat in pts)
+                found = True
+        # 3. Last resort: straight line from node coordinates
         if not found:
             for node in (u, v):
                 g = G_dir if node in G_dir.nodes else G_undir

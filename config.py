@@ -37,4 +37,4 @@ SEED = 42
 
 # How far beyond the main neighborhood boundary to include (meters).
 # This creates a buffer of secondary nodes around the main area.
-MARGIN_METERS = 500
+MARGIN_METERS = 250
