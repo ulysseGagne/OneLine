@@ -81,6 +81,13 @@ def generate_map_html(graph, output_dir="output", slug="map"):
     for u, v, data in graph.edges(data=True):
         if "geometry" in data:
             coords = [[float(y), float(x)] for x, y in data["geometry"].coords]
+            # Ensure coords run u→v (Shapely LineStrings can run either direction)
+            u_lat, u_lon = float(graph.nodes[u]["y"]), float(graph.nodes[u]["x"])
+            d_start_u = haversine(coords[0][0], coords[0][1], u_lat, u_lon)
+            d_start_v = haversine(coords[0][0], coords[0][1],
+                                  float(graph.nodes[v]["y"]), float(graph.nodes[v]["x"]))
+            if d_start_v < d_start_u:
+                coords.reverse()
         else:
             coords = [
                 [float(graph.nodes[u]["y"]), float(graph.nodes[u]["x"])],
@@ -351,53 +358,115 @@ def apply_edits(graph, edits):
     # When JS splits an edge whose original geometry runs v→u (opposite to the
     # stored u/v order), the two sub-edges receive each other's geometry+length.
     # Detect by comparing each geometry's far-end to its assigned original node.
+    # Also handles the case where only one sub-edge has geometry (the other lost
+    # it during export because coords.length <= 2).
     swaps_done = 0
+    one_sided_fixes = 0
     for split_node in [n for n in graph.nodes() if n < 0]:
-        siblings = []
+        siblings_with_geom = []
+        siblings_no_geom = []
         for neighbor in graph.neighbors(split_node):
             if neighbor >= 0:  # original (non-created) node only
                 for key in graph[split_node][neighbor]:
                     edata = graph[split_node][neighbor][key]
-                    if edata.get("created") and "geometry" in edata:
-                        siblings.append((neighbor, key))
+                    if edata.get("created"):
+                        if "geometry" in edata:
+                            siblings_with_geom.append((neighbor, key))
+                        else:
+                            siblings_no_geom.append((neighbor, key))
 
-        if len(siblings) != 2:
-            continue
+        # Case A: both sub-edges have geometry — existing swap logic
+        if len(siblings_with_geom) == 2 and len(siblings_no_geom) == 0:
+            orig1, key1 = siblings_with_geom[0]
+            orig2, key2 = siblings_with_geom[1]
+            if orig1 == orig2:
+                continue  # self-loop split — handled by 4b
 
-        orig1, key1 = siblings[0]
-        orig2, key2 = siblings[1]
-        if orig1 == orig2:
-            continue  # self-loop split — handled by 4b
+            pts1 = list(graph[split_node][orig1][key1]["geometry"].coords)
+            pts2 = list(graph[split_node][orig2][key2]["geometry"].coords)
 
-        pts1 = list(graph[split_node][orig1][key1]["geometry"].coords)
-        pts2 = list(graph[split_node][orig2][key2]["geometry"].coords)
+            sp_x, sp_y = graph.nodes[split_node]["x"], graph.nodes[split_node]["y"]
+            d1_first = abs(pts1[0][0] - sp_x) + abs(pts1[0][1] - sp_y)
+            d1_last = abs(pts1[-1][0] - sp_x) + abs(pts1[-1][1] - sp_y)
+            far1 = pts1[0] if d1_first > d1_last else pts1[-1]
 
-        # Find the non-split endpoint of each geometry (farther from split node)
-        sp_x, sp_y = graph.nodes[split_node]["x"], graph.nodes[split_node]["y"]
-        d1_first = abs(pts1[0][0] - sp_x) + abs(pts1[0][1] - sp_y)
-        d1_last = abs(pts1[-1][0] - sp_x) + abs(pts1[-1][1] - sp_y)
-        far1 = pts1[0] if d1_first > d1_last else pts1[-1]
+            o1_x, o1_y = graph.nodes[orig1]["x"], graph.nodes[orig1]["y"]
+            o2_x, o2_y = graph.nodes[orig2]["x"], graph.nodes[orig2]["y"]
 
-        d2_first = abs(pts2[0][0] - sp_x) + abs(pts2[0][1] - sp_y)
-        d2_last = abs(pts2[-1][0] - sp_x) + abs(pts2[-1][1] - sp_y)
-        far2 = pts2[0] if d2_first > d2_last else pts2[-1]
+            g1_to_o1 = abs(far1[0] - o1_x) + abs(far1[1] - o1_y)
+            g1_to_o2 = abs(far1[0] - o2_x) + abs(far1[1] - o2_y)
 
-        # Check: geom1's far end should be near orig1, geom2's far end near orig2
-        o1_x, o1_y = graph.nodes[orig1]["x"], graph.nodes[orig1]["y"]
-        o2_x, o2_y = graph.nodes[orig2]["x"], graph.nodes[orig2]["y"]
+            if g1_to_o2 < g1_to_o1:
+                data1 = graph[split_node][orig1][key1]
+                data2 = graph[split_node][orig2][key2]
+                data1["geometry"], data2["geometry"] = data2["geometry"], data1["geometry"]
+                data1["length"], data2["length"] = data2["length"], data1["length"]
+                swaps_done += 1
 
-        g1_to_o1 = abs(far1[0] - o1_x) + abs(far1[1] - o1_y)
-        g1_to_o2 = abs(far1[0] - o2_x) + abs(far1[1] - o2_y)
+        # Case B: one sub-edge has geometry, the other doesn't
+        elif len(siblings_with_geom) == 1 and len(siblings_no_geom) == 1:
+            geom_orig, geom_key = siblings_with_geom[0]
+            bare_orig, bare_key = siblings_no_geom[0]
+            if geom_orig == bare_orig:
+                continue
 
-        if g1_to_o2 < g1_to_o1:
-            data1 = graph[split_node][orig1][key1]
-            data2 = graph[split_node][orig2][key2]
-            data1["geometry"], data2["geometry"] = data2["geometry"], data1["geometry"]
-            data1["length"], data2["length"] = data2["length"], data1["length"]
-            swaps_done += 1
+            pts = list(graph[split_node][geom_orig][geom_key]["geometry"].coords)
+            sp_x, sp_y = graph.nodes[split_node]["x"], graph.nodes[split_node]["y"]
+
+            # Find the far end of the geometry (endpoint farthest from split node)
+            d_first = abs(pts[0][0] - sp_x) + abs(pts[0][1] - sp_y)
+            d_last = abs(pts[-1][0] - sp_x) + abs(pts[-1][1] - sp_y)
+            far = pts[0] if d_first > d_last else pts[-1]
+
+            # Check if the far end is near geom_orig (correct) or bare_orig (wrong)
+            go_x, go_y = graph.nodes[geom_orig]["x"], graph.nodes[geom_orig]["y"]
+            bo_x, bo_y = graph.nodes[bare_orig]["x"], graph.nodes[bare_orig]["y"]
+
+            d_far_geom = abs(far[0] - go_x) + abs(far[1] - go_y)
+            d_far_bare = abs(far[0] - bo_x) + abs(far[1] - bo_y)
+
+            if d_far_bare < d_far_geom:
+                # Geometry is on the wrong edge — move it to the bare edge
+                geom_data = graph[split_node][geom_orig][geom_key]
+                bare_data = graph[split_node][bare_orig][bare_key]
+
+                # Move geometry and length to the bare edge
+                bare_data["geometry"] = geom_data.pop("geometry")
+                bare_data["length"], geom_data["length"] = geom_data["length"], bare_data["length"]
+
+                # Try to reconstruct geometry for the now-bare geom_orig edge
+                sp_lat = float(graph.nodes[split_node]["y"])
+                sp_lon = float(graph.nodes[split_node]["x"])
+                go_lat = float(graph.nodes[geom_orig]["y"])
+                go_lon = float(graph.nodes[geom_orig]["x"])
+
+                reconstructed = None
+                for (u, v), dcoords in deleted_edge_geoms.items():
+                    from_seg, from_pt, from_dist = _snap_to_polyline(go_lat, go_lon, dcoords)
+                    to_seg, to_pt, to_dist = _snap_to_polyline(sp_lat, sp_lon, dcoords)
+                    if from_dist < 10 and to_dist < 10:
+                        sub = _extract_sub_polyline(dcoords, from_seg, from_pt, to_seg, to_pt)
+                        if len(sub) > 2:
+                            reconstructed = sub
+                        break
+
+                if reconstructed:
+                    geom_data["geometry"] = LineString([(pt[1], pt[0]) for pt in reconstructed])
+                    geom_data["length"] = sum(
+                        haversine(reconstructed[i][0], reconstructed[i][1],
+                                  reconstructed[i+1][0], reconstructed[i+1][1])
+                        for i in range(len(reconstructed) - 1)
+                    )
+                else:
+                    # Fallback: use haversine distance
+                    geom_data["length"] = haversine(go_lat, go_lon, sp_lat, sp_lon)
+
+                one_sided_fixes += 1
 
     if swaps_done:
         print(f"  Fixed {swaps_done} swapped sub-edge geometries")
+    if one_sided_fixes:
+        print(f"  Fixed {one_sided_fixes} one-sided sub-edge geometries")
 
     # 4b. Fix self-loop splits: parallel created edges between the same pair
     #     build_adjacency keeps only the longest, so the solver loses one half.

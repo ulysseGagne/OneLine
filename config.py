@@ -30,7 +30,7 @@ CUSTOM_FILTER = (
 )
 
 # Total compute time budget in minutes
-TIME_BUDGET_MINUTES = 20
+TIME_BUDGET_MINUTES = 30
 
 # Random seed for reproducibility
 SEED = 42

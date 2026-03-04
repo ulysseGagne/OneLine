@@ -1177,6 +1177,16 @@ function splitEdge(key, latlng) {
   if (key in deletedEdges) { flashWarning("Cannot split a deleted edge"); return; }
 
   var coords = info.coords;
+  // Ensure coords run u→v before slicing
+  var uPos = getNodeLatLon(info.u);
+  var vPos = getNodeLatLon(info.v);
+  if (uPos && vPos) {
+    var dStartU = haversine(coords[0][0], coords[0][1], uPos[0], uPos[1]);
+    var dStartV = haversine(coords[0][0], coords[0][1], vPos[0], vPos[1]);
+    if (dStartV < dStartU) {
+      coords = coords.slice().reverse();
+    }
+  }
   var result = closestPointOnPolyline(latlng, coords);
   if (!result.pt) return;
 
@@ -1238,6 +1248,18 @@ function splitEdge(key, latlng) {
 
 function splitCreatedEdge(cl, latlng) {
   var coords = cl.coords || [getNodeLatLon(cl.from_id), getNodeLatLon(cl.to_id)];
+  // Ensure coords run from_id→to_id before slicing
+  if (coords.length > 2) {
+    var fromPos = getNodeLatLon(cl.from_id);
+    var toPos = getNodeLatLon(cl.to_id);
+    if (fromPos && toPos) {
+      var dStartFrom = haversine(coords[0][0], coords[0][1], fromPos[0], fromPos[1]);
+      var dStartTo = haversine(coords[0][0], coords[0][1], toPos[0], toPos[1]);
+      if (dStartTo < dStartFrom) {
+        coords = coords.slice().reverse();
+      }
+    }
+  }
   var result = closestPointOnPolyline(latlng, coords);
   if (!result.pt) return;
 
