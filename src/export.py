@@ -44,7 +44,8 @@ def edge_path_to_coordinates(G_dir, G_undir, edge_path):
     return deduped
 
 
-def export_gpx(org_graph, graph, edge_path, location, slug="route"):
+def export_gpx(org_graph, graph, edge_path, location, slug="route",
+               filepath=None, quiet=False):
     """Generate and save a GPX file for the route."""
     coordinates = edge_path_to_coordinates(org_graph, graph, edge_path)
 
@@ -74,14 +75,15 @@ def export_gpx(org_graph, graph, edge_path, location, slug="route"):
         trkpts=trkpts,
     )
 
-    filename = f"{slug}_route.gpx"
-    filepath = os.path.join("output", filename)
-    
+    if filepath is None:
+        filepath = os.path.join("output", f"{slug}_route.gpx")
+
     with open(filepath, "w") as f:
         f.write(gpx)
 
-    print(f"GPX saved: {filepath}")
-    print(f"Track points: {len(coordinates)}")
+    if not quiet:
+        print(f"GPX saved: {filepath}")
+        print(f"Track points: {len(coordinates)}")
 
 
 def export_debug_graph_gpx(graph, location, slug="route"):

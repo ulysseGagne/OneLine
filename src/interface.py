@@ -297,6 +297,7 @@ def apply_edits(graph, edits):
 
     # 4. Add created edges with exported or haversine-computed lengths
     edges_added = 0
+    zero_pairs_seen = set()
     for ce in created_edges:
         from_osm = resolve_node_id(ce["from_id"])
         to_osm = resolve_node_id(ce["to_id"])
@@ -307,7 +308,15 @@ def apply_edits(graph, edits):
             print(f"  Warning: skipping edge (node not in graph)")
             continue
 
+        # Deduplicate zero-length path edges (both directions exported from JS)
         coords_raw = ce.get("coords")  # [[lat, lon], ...] from JS
+        is_zero_length = (ce.get("length", -1) == 0 or
+                          (not coords_raw or len(coords_raw) <= 2) and ce.get("type") == "path")
+        if is_zero_length:
+            pair = (min(from_osm, to_osm), max(from_osm, to_osm))
+            if pair in zero_pairs_seen:
+                continue
+            zero_pairs_seen.add(pair)
         if coords_raw and len(coords_raw) > 2:
             # Compute real polyline length from curved coords
             length = sum(
@@ -318,6 +327,8 @@ def apply_edits(graph, edits):
             # Shapely uses (x, y) = (lon, lat)
             geom = LineString([(pt[1], pt[0]) for pt in coords_raw])
             graph.add_edge(from_osm, to_osm, length=length, created=True, geometry=geom)
+        elif is_zero_length:
+            graph.add_edge(from_osm, to_osm, length=0, created=True)
         else:
             # Try to reconstruct geometry from a deleted edge
             from_lat = float(graph.nodes[from_osm]["y"])
@@ -479,7 +490,9 @@ def apply_edits(graph, edits):
         pair = (min(u, v), max(u, v))
         if pair in seen_pairs:
             continue
-        created_keys = [k2 for k2 in graph[u][v] if graph[u][v][k2].get("created", False)]
+        created_keys = [k2 for k2 in graph[u][v]
+                        if graph[u][v][k2].get("created", False)
+                        and graph[u][v][k2].get("length", 0) > 0.01]
         if len(created_keys) > 1:
             seen_pairs.add(pair)
             pairs_to_fix.append((u, v, created_keys))

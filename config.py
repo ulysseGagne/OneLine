@@ -29,11 +29,8 @@ CUSTOM_FILTER = (
     '["toll"!~"yes"]'
 )
 
-# Total compute time budget in minutes
-TIME_BUDGET_MINUTES = 30
-
-# Random seed for reproducibility
-SEED = 42
+# Random seed for reproducibility (starting seed for multi-restart)
+SEED = 114
 
 # How far beyond the main neighborhood boundary to include (meters).
 # This creates a buffer of secondary nodes around the main area.
