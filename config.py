@@ -30,7 +30,7 @@ CUSTOM_FILTER = (
 )
 
 # Random seed for reproducibility (starting seed for multi-restart)
-SEED = 114
+SEED = 1
 
 # How far beyond the main neighborhood boundary to include (meters).
 # This creates a buffer of secondary nodes around the main area.
