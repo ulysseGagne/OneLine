@@ -5,7 +5,7 @@ tag nodes as main or secondary, and prune dead-ends.
 """
 
 import osmnx as ox
-import networkx as nx
+# import networkx as nx
 import pickle
 import os
 from shapely.geometry import Point

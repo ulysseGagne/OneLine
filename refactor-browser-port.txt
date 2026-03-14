@@ -1,0 +1,116 @@
+GOAL
+====
+Port the entire project to run client-side in a web browser, hosted on
+GitHub Pages. Zero installation required for end users.
+
+
+ARCHITECTURE
+============
+Everything runs in the browser. No backend server.
+
+- Pyodide (CPython compiled to WebAssembly) executes the Python code
+  directly in the browser. Libraries like numpy, networkx, and shapely
+  are already available in Pyodide.
+
+- The interactive Leaflet map (map_template.html) is already JavaScript
+  and stays as-is.
+
+- A thin JavaScript layer loads Pyodide, passes data between the UI and
+  the Python code, and manages Web Workers.
+
+
+KEY CHANGE: REMOVE OSMNX
+=========================
+osmnx is the only dependency that cannot run in Pyodide (its dependency
+tree includes GDAL, PROJ, and other massive C++ libraries).
+
+However, we only use osmnx for two things:
+  1. ox.graph_from_point() — downloads street data from the Overpass API
+     and builds a NetworkX graph
+  2. ox.convert.to_undirected() — converts a directed graph to undirected
+
+Replace with pure Python that does the same thing:
+  1. Build an Overpass QL query string (filter by highway type, within a
+     radius of a center point)
+  2. Send the HTTP request (use urllib, which works in Pyodide, instead
+     of requests)
+  3. Parse the JSON response: extract nodes (with lat/lon) and ways
+  4. Build a NetworkX graph manually: add nodes with x/y attributes,
+     add edges between consecutive nodes in each way, store edge length
+  5. Convert to undirected (trivial with NetworkX)
+
+This also removes the "requests" dependency (replace with urllib).
+
+The rest of network.py (node tagging, dead-end removal) stays unchanged.
+
+
+ALSO REMOVE: PICKLE
+====================
+Pickle is used to serialize/deserialize the graph between prepare.py and
+solve.py. In the browser, there is no filesystem and no two-script flow.
+The graph stays in memory. Remove save_graph() and load_graph(), or
+replace with JSON serialization if persistence is needed (e.g. IndexedDB).
+
+
+BROWSER-SPECIFIC CONCERNS
+==========================
+
+Web Worker for the solver:
+  The solver runs for 45+ seconds. Without a Web Worker, the browser UI
+  freezes. Run Pyodide + solver.py inside a Web Worker. Post progress
+  updates back to the main thread so the UI can show a progress bar.
+
+File I/O:
+  The current code reads/writes files (pickle, JSON edits, CSV logs, GPX
+  exports). In the browser:
+  - Graph persistence: keep in memory or use IndexedDB
+  - Edits JSON: already handled in the map UI (export/import via download)
+  - CSV solver log: optional, could store in memory or skip
+  - GPX export: generate in memory, trigger browser download via Blob URL
+
+Single-page flow:
+  Currently there are two scripts (prepare.py then solve.py) with manual
+  steps in between. In the browser, this becomes a single-page app:
+  1. User picks a location on the map
+  2. App downloads street network (Overpass API call)
+  3. User edits the graph in the interactive map
+  4. User clicks "Solve" — solver runs in Web Worker
+  5. Results display on the map, GPX download available
+
+
+WHAT STAYS THE SAME
+====================
+- solver.py — the pathfinding algorithm, unchanged
+- boundaries.py — Overpass queries for neighborhood polygons (replace
+  requests with urllib)
+- interface.py — graph editing logic (apply_edits, etc.)
+- export.py — GPX generation (write to string instead of file)
+- visualize.py — path_nodes_to_edge_path helper, unchanged
+- portfolio.py — multi-route portfolio management, unchanged
+- map_template.html — the Leaflet-based interactive map, unchanged
+
+
+ORDER OF OPERATIONS
+===================
+1. Remove osmnx: rewrite the Overpass call + graph construction in pure
+   Python. Test that prepare.py still works identically on desktop.
+
+2. Remove requests: replace with urllib in boundaries.py and the new
+   Overpass code. Test again on desktop.
+
+3. Remove pickle: replace graph serialization with JSON or remove it
+   entirely. Test the full prepare -> solve flow on desktop.
+
+4. At this point the project has zero hard-to-port dependencies. The
+   remaining deps (numpy, networkx, shapely) all work in Pyodide.
+
+5. Build the browser shell: single HTML page that loads Pyodide, runs
+   the Python code, and connects to the existing Leaflet map UI.
+
+6. Move the solver into a Web Worker so the UI stays responsive.
+
+7. Deploy to GitHub Pages.
+
+Steps 1-3 should be done and tested on desktop first, before touching
+any browser/Pyodide integration. Each step should leave the project
+fully functional on desktop.
