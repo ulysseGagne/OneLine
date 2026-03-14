@@ -1692,8 +1692,10 @@ function handleGpxFiles(event) {
       var reader = new FileReader();
       reader.onload = function(e) {
         try {
-          var coords = parseGpx(e.target.result);
-          if (coords.length > 0) addGpxOverlay(coords, file.name);
+          var segments = parseGpx(e.target.result);
+          for (var s = 0; s < segments.length; s++) {
+            addGpxOverlay(segments[s], file.name);
+          }
         } catch (err) {
           alert("Error parsing GPX file " + file.name + ": " + err.message);
         }
@@ -1707,14 +1709,19 @@ function handleGpxFiles(event) {
 function parseGpx(xmlString) {
   var parser = new DOMParser();
   var doc = parser.parseFromString(xmlString, "application/xml");
-  var coords = [];
-  var trkpts = doc.getElementsByTagName("trkpt");
-  for (var i = 0; i < trkpts.length; i++) {
-    var lat = parseFloat(trkpts[i].getAttribute("lat"));
-    var lon = parseFloat(trkpts[i].getAttribute("lon"));
-    if (!isNaN(lat) && !isNaN(lon)) coords.push([lat, lon]);
+  var segments = [];
+  var trksegs = doc.getElementsByTagName("trkseg");
+  for (var s = 0; s < trksegs.length; s++) {
+    var coords = [];
+    var trkpts = trksegs[s].getElementsByTagName("trkpt");
+    for (var i = 0; i < trkpts.length; i++) {
+      var lat = parseFloat(trkpts[i].getAttribute("lat"));
+      var lon = parseFloat(trkpts[i].getAttribute("lon"));
+      if (!isNaN(lat) && !isNaN(lon)) coords.push([lat, lon]);
+    }
+    if (coords.length > 0) segments.push(coords);
   }
-  return coords;
+  return segments;
 }
 
 function addGpxOverlay(coords, name) {
