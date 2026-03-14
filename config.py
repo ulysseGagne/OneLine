@@ -3,7 +3,7 @@ import re
 import unicodedata
 
 # The main neighborhood to map
-LOCATION = "Cap-Rouge, Québec, Canada"
+LOCATION = "L'Île-d'Orléans, Capitale-Nationale, Quebec, Canada"
 
 def get_slug():
     """Derive a filename-safe slug from LOCATION (uses first part before comma)."""
@@ -34,4 +34,8 @@ SEED = 1
 
 # How far beyond the main neighborhood boundary to include (meters).
 # This creates a buffer of secondary nodes around the main area.
-MARGIN_METERS = 250
+MARGIN_METERS = 100
+
+# Maximum distance (meters) between two nodes to trigger a proximity warning.
+PROXIMITY_DISTANCE = 50
+

@@ -3,19 +3,32 @@
 Fetch the main neighborhood's boundary polygon from OpenStreetMap.
 """
 
+import time
 import requests
 from shapely.geometry import LineString
 from shapely.ops import polygonize, unary_union
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OVERPASS_TIMEOUT = 60
+OVERPASS_MAX_RETRIES = 3
+OVERPASS_RETRY_DELAY = 5
 
 
 def _overpass_query(query):
     """Send a query to the Overpass API and return the JSON response."""
-    resp = requests.get(OVERPASS_URL, params={"data": query}, timeout=OVERPASS_TIMEOUT)
-    resp.raise_for_status()
-    return resp.json()
+    for attempt in range(1, OVERPASS_MAX_RETRIES + 1):
+        try:
+            resp = requests.get(OVERPASS_URL, params={"data": query}, timeout=OVERPASS_TIMEOUT)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.HTTPError as e:
+            print(f"  Overpass API error: {e}")
+            if attempt < OVERPASS_MAX_RETRIES:
+                delay = OVERPASS_RETRY_DELAY * attempt
+                print(f"  Retrying in {delay}s (attempt {attempt}/{OVERPASS_MAX_RETRIES})...")
+                time.sleep(delay)
+            else:
+                raise
 
 
 def _extract_way_coords(elements):

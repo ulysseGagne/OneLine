@@ -10,6 +10,7 @@ import numpy as np
 import networkx as nx
 from math import radians, sin, cos, sqrt, atan2
 from shapely.geometry import LineString
+import config
 
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -137,6 +138,7 @@ def generate_map_html(graph, output_dir="output", slug="map"):
     html = html.replace("%%EDGES%%", json.dumps(edge_lines))
     html = html.replace("%%NODES%%", json.dumps(nodes_data))
     html = html.replace("%%SLUG%%", slug)
+    html = html.replace("%%PROXIMITY_DISTANCE%%", str(config.PROXIMITY_DISTANCE))
     html = html.replace("%%INITIAL_EDITS%%", json.dumps(initial_edits))
 
     # Save
@@ -203,26 +205,60 @@ def apply_edits(graph, edits):
     start_ids_raw = edits.get("start_ids", [])
     end_ids_raw = edits.get("end_ids", [])
 
+    # Pre-build HTML edge key mapping: replicate the JS edgeKeyCounter logic
+    # so we can map (min_sid, max_sid, html_idx) → (u_osm, v_osm, graph_key).
+    # Must be done before any deletions so the mapping stays correct.
+    osm_to_id_map = {osm: i for i, osm in enumerate(node_list)}
+    _edge_key_counter = {}
+    edge_by_html_key = {}
+    for u, v, k in graph.edges(keys=True):
+        u_sid = osm_to_id_map.get(u)
+        v_sid = osm_to_id_map.get(v)
+        if u_sid is not None and v_sid is not None:
+            base = (min(u_sid, v_sid), max(u_sid, v_sid))
+            html_idx = _edge_key_counter.get(base, 0)
+            _edge_key_counter[base] = html_idx + 1
+            edge_by_html_key[(base[0], base[1], html_idx)] = (u, v, k)
+
     print("\n--- Applying edits to graph ---")
 
     # 0. Save geometries of edges that will be deleted (before any modifications)
     deleted_edge_geoms = {}  # (u_osm, v_osm) -> [(lat, lon), ...]
     for de in deleted_edges_list:
-        u_osm = id_to_osm.get(de.get("u"))
-        v_osm = id_to_osm.get(de.get("v"))
-        if u_osm and v_osm and u_osm in graph and v_osm in graph and graph.has_edge(u_osm, v_osm):
-            for key in sorted(graph[u_osm][v_osm].keys()):
-                data = graph[u_osm][v_osm][key]
+        u_sid, v_sid, idx = de.get("u"), de.get("v"), de.get("idx")
+        if idx is not None:
+            lookup = edge_by_html_key.get((min(u_sid, v_sid), max(u_sid, v_sid), idx))
+            if not lookup:
+                continue
+            eu, ev, ek = lookup
+            if eu in graph and ev in graph and graph.has_edge(eu, ev) and ek in graph[eu][ev]:
+                data = graph[eu][ev][ek]
                 if "geometry" in data:
                     coords = [(float(y), float(x)) for x, y in data["geometry"].coords]
                 else:
                     coords = [
-                        (float(graph.nodes[u_osm]["y"]), float(graph.nodes[u_osm]["x"])),
-                        (float(graph.nodes[v_osm]["y"]), float(graph.nodes[v_osm]["x"])),
+                        (float(graph.nodes[eu]["y"]), float(graph.nodes[eu]["x"])),
+                        (float(graph.nodes[ev]["y"]), float(graph.nodes[ev]["x"])),
                     ]
-                deleted_edge_geoms[(u_osm, v_osm)] = coords
-                deleted_edge_geoms[(v_osm, u_osm)] = list(reversed(coords))
-                break
+                deleted_edge_geoms[(eu, ev)] = coords
+                deleted_edge_geoms[(ev, eu)] = list(reversed(coords))
+        else:
+            # Backward compat (old format without idx) — save first key's geometry
+            u_osm = id_to_osm.get(u_sid)
+            v_osm = id_to_osm.get(v_sid)
+            if u_osm and v_osm and u_osm in graph and v_osm in graph and graph.has_edge(u_osm, v_osm):
+                for key in sorted(graph[u_osm][v_osm].keys()):
+                    data = graph[u_osm][v_osm][key]
+                    if "geometry" in data:
+                        coords = [(float(y), float(x)) for x, y in data["geometry"].coords]
+                    else:
+                        coords = [
+                            (float(graph.nodes[u_osm]["y"]), float(graph.nodes[u_osm]["x"])),
+                            (float(graph.nodes[v_osm]["y"]), float(graph.nodes[v_osm]["x"])),
+                        ]
+                    deleted_edge_geoms[(u_osm, v_osm)] = coords
+                    deleted_edge_geoms[(v_osm, u_osm)] = list(reversed(coords))
+                    break
 
     # 1. Remove deleted main nodes
     deleted_osm = set()
@@ -236,28 +272,26 @@ def apply_edits(graph, edits):
     # 1b. Remove deleted edges
     edges_removed = 0
     for de in deleted_edges_list:
-        u_sid = de.get("u")
-        v_sid = de.get("v")
-        idx = de.get("idx")
-        u_osm = id_to_osm.get(u_sid)
-        v_osm = id_to_osm.get(v_sid)
-        if u_osm and v_osm and u_osm in graph and v_osm in graph:
-            if graph.has_edge(u_osm, v_osm):
-                if idx is not None:
-                    # Remove only the specific parallel edge
-                    keys = sorted(graph[u_osm][v_osm].keys())
-                    if idx < len(keys):
-                        graph.remove_edge(u_osm, v_osm, key=keys[idx])
+        u_sid, v_sid, idx = de.get("u"), de.get("v"), de.get("idx")
+        if idx is not None:
+            lookup = edge_by_html_key.get((min(u_sid, v_sid), max(u_sid, v_sid), idx))
+            if lookup:
+                eu, ev, ek = lookup
+                if eu in graph and ev in graph and graph.has_edge(eu, ev) and ek in graph[eu][ev]:
+                    graph.remove_edge(eu, ev, key=ek)
+                    edges_removed += 1
+        else:
+            # Backward compat: no idx → remove all edges between pair
+            u_osm = id_to_osm.get(u_sid)
+            v_osm = id_to_osm.get(v_sid)
+            if u_osm and v_osm and u_osm in graph and v_osm in graph:
+                while graph.has_edge(u_osm, v_osm):
+                    keys = list(graph[u_osm][v_osm].keys())
+                    if keys:
+                        graph.remove_edge(u_osm, v_osm, keys[0])
                         edges_removed += 1
-                else:
-                    # Backward compat: no idx → remove all edges between pair
-                    while graph.has_edge(u_osm, v_osm):
-                        keys = list(graph[u_osm][v_osm].keys())
-                        if keys:
-                            graph.remove_edge(u_osm, v_osm, keys[0])
-                            edges_removed += 1
-                        else:
-                            break
+                    else:
+                        break
     if edges_removed:
         print(f"  Removed {edges_removed} deleted edges")
 
