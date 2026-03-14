@@ -3,7 +3,8 @@ import re
 import unicodedata
 
 # The main neighborhood to map
-LOCATION = "L'Île-d'Orléans, Capitale-Nationale, Quebec, Canada"
+LOCATION = "Plateau, Sainte-Foy–Sillery–Cap-Rouge, Quebec, Urban agglomeration of Québec, Capitale-Nationale, Quebec, Canada"
+# openstreetmap.org
 
 def get_slug():
     """Derive a filename-safe slug from LOCATION (uses first part before comma)."""
