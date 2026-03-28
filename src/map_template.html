@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html><head>
 <meta charset="utf-8"/>
+<meta name="referrer" content="no-referrer-when-downgrade"/>
 <title>Route Editor</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -38,6 +39,7 @@
   .mode-btn.active-warnings  { border-color: #ffc21c; background: #fec; color: #860; }
   .mode-btn.active-start     { border-color: #333; background: #f0f0f0; color: #000; }
   .mode-btn.active-end       { border-color: #333; background: #f0f0f0; color: #333; }
+
   .color-dot {
     display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
   }
@@ -133,7 +135,10 @@
       <button class="export-btn" id="export-btn" onclick="doExport()">⬇ Export</button>
     </div>
     <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(event)">
-    <button class="export-btn" id="gpx-btn" onclick="doImportGpx()" style="background:#333;margin-top:6px;font-size:12px;padding:9px">Import GPX overlay</button>
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <button class="export-btn" id="gpx-btn" onclick="doImportGpx()" style="background:#333;font-size:12px;padding:9px;margin-top:0">Import GPX overlay</button>
+      <button class="export-btn" id="btn-map-skin" onclick="cycleMapSkin()" style="background:#333;font-size:12px;padding:9px;margin-top:0">Map: Light</button>
+    </div>
     <input type="file" id="gpx-file" accept=".gpx" multiple style="display:none" onchange="handleGpxFiles(event)">
     <div class="undo-hint">⌘Z / Ctrl+Z to undo · ⌘⇧Z / Ctrl+⇧Z to redo</div>
     <div class="node-info" id="node-info">Hover over a node for details</div>
@@ -205,10 +210,19 @@ var createdLines   = [];
    MAP
    ══════════════════════════════════════════════ */
 var map = L.map("map").setView(CENTER, 15);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+var currentTileLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
   maxZoom: 20, subdomains: "abcd"
 }).addTo(map);
+var mapSkinIndex = 0;
+var mapSkins = [
+  { name: "Light", url: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+    opts: { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>', maxZoom: 20, subdomains: "abcd" } },
+  { name: "OSM", url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    opts: { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19 } },
+  { name: "Satellite", url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    opts: { attribution: 'Esri', maxZoom: 19 } }
+];
 // GPX overlays render below everything else
 map.createPane('gpxPane');
 map.getPane('gpxPane').style.zIndex = 350;
@@ -237,8 +251,8 @@ EDGES.forEach(function(e) {
   var line   = L.polyline(e.coords, { color: color, weight: 4,  opacity: 1.0 }).addTo(map);
   var hitbox = L.polyline(e.coords, { color: color, weight: 18, opacity: 0   }).addTo(map);
   edgeLineMap[key] = { line: line, hitbox: hitbox, u: e.u, v: e.v, bothMain: bothMain, coords: e.coords };
-  line.on("click",   function(ev) { onEdgeClick(key, ev.latlng); });
-  hitbox.on("click", function(ev) { onEdgeClick(key, ev.latlng); });
+  line.on("click",   function(ev) { if (ev.originalEvent.altKey) return; onEdgeClick(key, ev.latlng); });
+  hitbox.on("click", function(ev) { if (ev.originalEvent.altKey) return; onEdgeClick(key, ev.latlng); });
 });
 
 // Draw nodes
@@ -250,7 +264,7 @@ NODES.forEach(function(n) {
   marker.bindTooltip(String(n.id), {
     permanent: false, direction: "top", offset: [0, -6], className: "node-label"
   });
-  marker.on("click", function() { onNodeClick(n.id); });
+  marker.on("click", function(ev) { if (ev.originalEvent.altKey) return; onNodeClick(n.id); });
   marker.on("mouseover", function() {
     document.getElementById("node-info").textContent =
       "Node " + n.id + " | " + n.neighborhood + " | deg: " + n.deg +
@@ -262,6 +276,12 @@ NODES.forEach(function(n) {
 
 // Map click for add-node mode
 map.on("click", function(e) {
+  // Shift+click → open Google Street View
+  if (e.originalEvent.altKey) {
+    var url = "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=" + e.latlng.lat + "," + e.latlng.lng;
+    window.open(url, "_blank");
+    return;
+  }
   // Marker clicks set this flag; small timeout to handle race condition
   if (window._markerClickFlag) { window._markerClickFlag = false; return; }
   // Background click clears edge source selection in draw modes
@@ -472,8 +492,8 @@ function revealSecondaryEdges(id) {
     var line   = L.polyline(sec.coords, { color: "#ccc", weight: 2, opacity: 0.5 }).addTo(map);
     var hitbox = L.polyline(sec.coords, { color: C_EDGE_MIX, weight: 18, opacity: 0  }).addTo(map);
     edgeLineMap[key] = { line: line, hitbox: hitbox, u: sec.u, v: sec.v, bothMain: false, coords: sec.coords };
-    line.on("click",   function(ev) { onEdgeClick(key, ev.latlng); });
-    hitbox.on("click", function(ev) { onEdgeClick(key, ev.latlng); });
+    line.on("click",   function(ev) { if (ev.originalEvent.altKey) return; onEdgeClick(key, ev.latlng); });
+    hitbox.on("click", function(ev) { if (ev.originalEvent.altKey) return; onEdgeClick(key, ev.latlng); });
   });
 }
 
@@ -1205,7 +1225,7 @@ function addCreatedMarker(id, lat, lon, label) {
     radius: 7, fillColor: C_CYAN, color: "#fff", weight: 1.5, fillOpacity: 1.0, pane: 'nodePane'
   }).addTo(map);
   marker.bindTooltip(id, { permanent: false, direction: "top", offset: [0, -6], className: "node-label" });
-  marker.on("click", function() { onNodeClick(id); });
+  marker.on("click", function(ev) { if (ev.originalEvent.altKey) return; onNodeClick(id); });
   marker.on("mouseover", function() {
     document.getElementById("node-info").textContent =
       label + " " + id + " | lat: " + lat.toFixed(5) + " lon: " + lon.toFixed(5);
@@ -1256,8 +1276,8 @@ function addCreatedEdgeNoUndo(fromId, toId, opts) {
   var cl = { line: line, hitbox: hitbox, from_id: fromId, to_id: toId, split: opts.split, edgeType: edgeType, coords: coords };
   createdEdges.push({ from_id: fromId, to_id: toId, edgeType: edgeType });
   createdLines.push(cl);
-  line.on("click",   function(ev) { L.DomEvent.stopPropagation(ev); onCreatedEdgeClick(cl, ev.latlng); });
-  hitbox.on("click", function(ev) { L.DomEvent.stopPropagation(ev); onCreatedEdgeClick(cl, ev.latlng); });
+  line.on("click",   function(ev) { if (ev.originalEvent.altKey) return; L.DomEvent.stopPropagation(ev); onCreatedEdgeClick(cl, ev.latlng); });
+  hitbox.on("click", function(ev) { if (ev.originalEvent.altKey) return; L.DomEvent.stopPropagation(ev); onCreatedEdgeClick(cl, ev.latlng); });
 }
 
 function onCreatedEdgeClick(cl, latlng) {
@@ -1684,6 +1704,14 @@ function doImportGpx() {
   document.getElementById("gpx-file").click();
 }
 
+function cycleMapSkin() {
+  map.removeLayer(currentTileLayer);
+  mapSkinIndex = (mapSkinIndex + 1) % mapSkins.length;
+  var skin = mapSkins[mapSkinIndex];
+  currentTileLayer = L.tileLayer(skin.url, skin.opts).addTo(map);
+  document.getElementById("btn-map-skin").textContent = 'Map: ' + skin.name;
+}
+
 function handleGpxFiles(event) {
   var files = event.target.files;
   if (!files.length) return;
@@ -1736,7 +1764,8 @@ function addGpxOverlay(coords, name) {
   var overlay = { line: line, hitbox: hitbox, name: name };
   gpxOverlays.push(overlay);
 
-  hitbox.on("click", function() {
+  hitbox.on("click", function(ev) {
+    if (ev.originalEvent.altKey) return;
     if (mode === "delete") {
       map.removeLayer(line);
       map.removeLayer(hitbox);

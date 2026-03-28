@@ -3,7 +3,7 @@ import re
 import unicodedata
 
 # The main neighborhood to map
-LOCATION = "Plateau, Sainte-Foy–Sillery–Cap-Rouge, Quebec, Urban agglomeration of Québec, Capitale-Nationale, Quebec, Canada"
+LOCATION = "Pointe-de-Sainte-Foy, Sainte-Foy–Sillery–Cap-Rouge, Quebec, Urban agglomeration of Québec, Capitale-Nationale, Quebec, Canada"
 # openstreetmap.org
 
 def get_slug():
@@ -35,8 +35,8 @@ SEED = 1
 
 # How far beyond the main neighborhood boundary to include (meters).
 # This creates a buffer of secondary nodes around the main area.
-MARGIN_METERS = 100
+MARGIN_METERS = 50
 
 # Maximum distance (meters) between two nodes to trigger a proximity warning.
-PROXIMITY_DISTANCE = 50
+PROXIMITY_DISTANCE = 40
 

@@ -44,13 +44,24 @@ def main():
     # 4. Generate interactive map
     map_path = interface.generate_map_html(merged_graph, slug=slug)
 
-    # 5. Open in browser
-    import webbrowser
-    webbrowser.open("file://" + os.path.abspath(map_path))
+    # 5. Open in browser via local server (OSM tiles require a valid Referer header)
+    import webbrowser, functools
+    from http.server import HTTPServer, SimpleHTTPRequestHandler
 
-    print(f"\n✅ Done! Open output/{slug}_map.html to edit the graph.")
+    port = 8042
+    handler = functools.partial(SimpleHTTPRequestHandler, directory="output")
+    server = HTTPServer(("localhost", port), handler)
+    filename = os.path.basename(map_path)
+    webbrowser.open(f"http://localhost:{port}/{filename}")
+
+    print(f"\n✅ Done! Serving map at http://localhost:{port}/{filename}")
     print(f"   When finished, click Export (saves {slug}_edits.json)")
-    print("   Then run: python solve.py")
+    print("   Then press Ctrl+C and run: python solve.py")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
 
 
 if __name__ == "__main__":

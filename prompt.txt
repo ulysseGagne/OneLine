@@ -1,9 +1,1 @@
-when i try to import vdq-quartier.gpx into the HTML editor using "IMPORT GPX OVERLAY", it renders multiple unwanted straight lines (see screenshot.png).
-
-I think it may be because the gpx files has multiple lines, and they're automatically visually connected to each other as if they were one line.
-
-How would you fix this bug? Ideally i'd like you to change the gpx file itself, not the code. This would prevent cascading bugs elsewhere in the program.
-
-That being said, if the fix is extremely simple & would allow future for-formatted-correctly gpx files from rendering those unwanted lines, it may be a good idea to alter the code instead of the gpx file.
-
-Thoughts?
+todo: including grey nodes does not work properly.
