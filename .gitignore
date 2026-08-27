@@ -14,3 +14,4 @@ output/*.gpx
 output/*.png
 output/*.html
 cache/
+archive/
