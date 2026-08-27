@@ -116,7 +116,7 @@ def generate_map_html(graph, output_dir="output", slug="map"):
         })
 
     # Read the HTML template
-    template_path = os.path.join(os.path.dirname(__file__), "map_template.html")
+    template_path = os.path.join(os.path.dirname(__file__), "map-template.html")
     with open(template_path, "r", encoding="utf-8") as f:
         html = f.read()
 
