@@ -12,13 +12,17 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OVERPASS_TIMEOUT = 60
 OVERPASS_MAX_RETRIES = 3
 OVERPASS_RETRY_DELAY = 5
+# Overpass rejects the default python-requests User-Agent with 406 Not Acceptable;
+# its usage policy also asks clients to identify themselves.
+OVERPASS_HEADERS = {"User-Agent": "one-line/1.0 (ugagne08@gmail.com)"}
 
 
 def _overpass_query(query):
     """Send a query to the Overpass API and return the JSON response."""
     for attempt in range(1, OVERPASS_MAX_RETRIES + 1):
         try:
-            resp = requests.get(OVERPASS_URL, params={"data": query}, timeout=OVERPASS_TIMEOUT)
+            resp = requests.get(OVERPASS_URL, params={"data": query}, timeout=OVERPASS_TIMEOUT,
+                                 headers=OVERPASS_HEADERS)
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.HTTPError as e:
