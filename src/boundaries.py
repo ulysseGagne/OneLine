@@ -10,7 +10,7 @@ from shapely.ops import polygonize, unary_union
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OVERPASS_TIMEOUT = 60
-OVERPASS_MAX_RETRIES = 3
+OVERPASS_MAX_RETRIES = 5
 OVERPASS_RETRY_DELAY = 5
 # Overpass rejects the default python-requests User-Agent with 406 Not Acceptable;
 # its usage policy also asks clients to identify themselves.
@@ -25,8 +25,12 @@ def _overpass_query(query):
                                  headers=OVERPASS_HEADERS)
             resp.raise_for_status()
             return resp.json()
-        except requests.exceptions.HTTPError as e:
-            print(f"  Overpass API error: {e}")
+        except (requests.exceptions.HTTPError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            # ConnectionError covers overpass-api.de handing out a dead backend
+            # ([Errno 61] Connection refused); a fresh retry gets a new connection.
+            print(f"  Overpass API error: {e.__class__.__name__}: {e}")
             if attempt < OVERPASS_MAX_RETRIES:
                 delay = OVERPASS_RETRY_DELAY * attempt
                 print(f"  Retrying in {delay}s (attempt {attempt}/{OVERPASS_MAX_RETRIES})...")

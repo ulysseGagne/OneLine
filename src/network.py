@@ -8,7 +8,29 @@ import osmnx as ox
 # import networkx as nx
 import pickle
 import os
+import time
+import requests
 from shapely.geometry import Point
+
+# overpass-api.de round-robins across backends; when one is down a fresh
+# connection gets [Errno 61] Connection refused. osmnx retries 429/504 on its
+# own but not connection errors, so wrap the download and retry (each attempt
+# is a new connection = new chance at a healthy backend).
+OVERPASS_MAX_RETRIES = 5
+OVERPASS_RETRY_DELAY = 5
+
+
+def _graph_from_point_resilient(center, dist, custom_filter):
+    for attempt in range(1, OVERPASS_MAX_RETRIES + 1):
+        try:
+            return ox.graph_from_point(center, dist=dist, custom_filter=custom_filter)
+        except requests.exceptions.ConnectionError as e:
+            if attempt == OVERPASS_MAX_RETRIES:
+                raise
+            delay = OVERPASS_RETRY_DELAY * attempt
+            print(f"  Overpass connection failed ({e.__class__.__name__}); "
+                  f"retrying in {delay}s (attempt {attempt}/{OVERPASS_MAX_RETRIES})...")
+            time.sleep(delay)
 
 
 def download_graph(main_boundary, custom_filter, margin_meters=500):
@@ -49,9 +71,8 @@ def download_graph(main_boundary, custom_filter, margin_meters=500):
     ox.settings.use_cache = True
     ox.settings.log_console = False
     t0 = time.time()
-    org_graph = ox.graph_from_point(
-        (center_lat, center_lon), dist=radius,
-        custom_filter=custom_filter,
+    org_graph = _graph_from_point_resilient(
+        (center_lat, center_lon), radius, custom_filter,
     )
     elapsed = time.time() - t0
     graph = ox.convert.to_undirected(org_graph)
